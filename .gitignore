@@ -1,0 +1,10 @@
+# DERO reference source (fetched from GitHub tarball; do not commit)
+derohe-reference/
+# Rust build artifacts
+crypto/target/
+# Go build artifacts
+oracle/oracle.exe
+oracle/oracle
+# Python cache
+__pycache__/
+*.pyc
