@@ -127,14 +127,17 @@ Toolchain notes (Windows):
 
 ## License
 
-- **Rust crate (`crypto/`): BSD-3-Clause** (see LICENSE) — the permissive
-  escape hatch (XELIS/BSD-3 precedent). Clean-room: written from the DERO
-  reference source + protocol spec, NOT copied from it.
+- **Rust crate (`crypto/`): DERO Research License v1.1.2** (see LICENSE) —
+  **research-only**, matching the DERO ecosystem license. This is a
+  deliberate decision to keep the port within DERO's licensing family:
+  non-commercial research/evaluation/development use, no commercial gain.
+  Clean-room: written from the DERO reference source + protocol spec,
+  NOT copied from it.
 - **`oracle/` (Go): test-only glue.** It links the REAL derohe packages
-  (under DERO Research License v1.1.2) via the `replace` directive to
-  `../derohe-reference`. The oracle source is a thin JSONL shim; the
-  reference it links is gitignored and never committed. It is a test
-  harness, not part of the permissive crate, and carries the same
+  (under the same DERO Research License v1.1.2) via the `replace`
+  directive to `../derohe-reference`. The oracle source is a thin JSONL
+  shim; the reference it links is gitignored and never committed. It is
+  a test harness, not part of the crate, and carries the same
   non-commercial constraint as the DERO code it calls.
 - **`derohe-reference/`**: DERO Research License v1.1.2 — **test oracle
   only, never committed, never copied into the Rust crate** (clean-room).
