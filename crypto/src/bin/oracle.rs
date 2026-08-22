@@ -5,6 +5,7 @@
 //!   resp: {"id": <int>, "ok": true, "out": { ... }}
 //!         {"id": <int>, "ok": false, "err": "<message>"}
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 
 use ark_bn254::{Fr, G1Projective};
@@ -1003,6 +1004,132 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let pow = num_bigint::BigUint::from_bytes_be(&rev);
                 let target = (num_bigint::BigUint::from(1u8) << 256usize) / &difficulty;
                 Ok(json!({"valid": pow <= target}))
+            }
+            "dvm_parse" => {
+                use dero_crypto::dvm;
+                let code = s("code")?;
+                match dvm::parse_smart_contract(&code) {
+                    Ok(sc) => {
+                        let mut names: Vec<String> = sc.functions.keys().cloned().collect();
+                        names.sort();
+                        let mut out = serde_json::Map::new();
+                        out.insert("ok".into(), json!(true));
+                        out.insert("functions".into(), json!(names));
+                        for name in &names {
+                            let f = &sc.functions[name];
+                            let paramtypes: Vec<String> = f.params.iter().map(|p| format!("{}", p.vtype as u8)).collect();
+                            let lines: Vec<String> = f.line_numbers.iter().map(|ln| format!("{}:{}", ln, f.lines[ln].join(" "))).collect();
+                            out.insert(format!("fn_{}", name), json!({
+                                "ret": (f.return_value.vtype as u8).to_string(),
+                                "params": paramtypes,
+                                "lines": lines,
+                            }));
+                        }
+                        Ok(serde_json::Value::Object(out))
+                    }
+                    Err(e) => Ok(json!({"ok": false, "err": e})),
+                }
+            }
+            "dvm_rnd" => {
+                use dero_crypto::dvm::{initialize_rnd, Rnd};
+                let hx = |k: &str| -> [u8; 32] {
+                    let mut h = [0u8; 32];
+                    if let Ok(v) = hex::decode(s_key(inp, k).unwrap_or_default()) {
+                        let n = v.len().min(32);
+                        h[..n].copy_from_slice(&v[..n]);
+                    }
+                    h
+                };
+                let scid = hx("scid");
+                let blid = hx("blid");
+                let txid = hx("txid");
+                let mut r: Rnd = initialize_rnd(&scid, &blid, &txid);
+                let n: u64 = s_key(inp, "n").unwrap_or_else(|_| "5".into()).parse().unwrap_or(5);
+                let mut vals = Vec::new();
+                for _ in 0..n {
+                    vals.push(r.random().to_string());
+                }
+                Ok(json!({"vals": vals}))
+            }
+            "dvm_run" => {
+                use dero_crypto::dvm::*;
+                let code = s("code")?;
+                let sc = parse_smart_contract(&code).map_err(|e| e)?;
+                let hx = |k: &str| -> [u8; 32] {
+                    let mut h = [0u8; 32];
+                    if let Ok(v) = hex::decode(s_key(inp, k).unwrap_or_default()) {
+                        let n = v.len().min(32);
+                        h[..n].copy_from_slice(&v[..n]);
+                    }
+                    h
+                };
+                let scid = hx("scid");
+                let blid = hx("blid");
+                let txid = hx("txid");
+                let entrypoint = s("entrypoint")?;
+                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let ts: u64 = s_key(inp, "timestamp").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let signer = s_key(inp, "signer").unwrap_or_default();
+                let mut params: HashMap<String, String> = HashMap::new();
+                if let Some(v) = inp.get("params") {
+                    if let Ok(pm) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&v.to_string()) {
+                        for (k, val) in pm {
+                            params.insert(k, val.as_str().unwrap_or("").to_string());
+                        }
+                    }
+                }
+                let mut state = SharedState {
+                    scid_zero: [0; 32],
+                    scid_self: scid,
+                    gas_compute_used: 0,
+                    gas_compute_limit: 10000000,
+                    gas_compute_check: true,
+                    gas_store_used: 0,
+                    gas_store_limit: 0,
+                    gas_store_check: false,
+                    chain_inputs: BlockchainInput {
+                        scid, blid, txid, signer,
+                        bl_height: height, bl_topoheight: 0, bl_timestamp: ts,
+                    },
+                    assets: HashMap::new(),
+                    assets_transfer: HashMap::new(),
+                    ram_store: HashMap::new(),
+                    monitor_recursion: 0,
+                    monitor_lines_interpreted: 0,
+                    monitor_ops: 0,
+                    store: Box::new(TXStorage { scid, raw_keys: HashMap::new(), state: None }),
+                    rnd: initialize_rnd(&scid, &blid, &txid),
+                };
+                state.store.state = Some(state.clone());
+                let result = run_smart_contract(&sc, &entrypoint, &mut state, &params);
+                let mut out = serde_json::Map::new();
+                out.insert("gas_compute".into(), json!(state.gas_compute_used.to_string()));
+                out.insert("gas_storage".into(), json!(state.gas_store_used.to_string()));
+                out.insert("ops".into(), json!(state.monitor_ops.to_string()));
+                out.insert("lines".into(), json!(state.monitor_lines_interpreted.to_string()));
+                match result {
+                    Ok(v) => {
+                        out.insert("ok".into(), json!(true));
+                        out.insert("ret_type".into(), json!(v.vtype as u8));
+                        match v.vtype {
+                            Vtype::Uint64 => { out.insert("ret".into(), json!(v.value_uint64.to_string())); }
+                            Vtype::String => { out.insert("ret".into(), json!(v.value_string)); }
+                            _ => {}
+                        }
+                        let mut keys: Vec<&String> = state.store.raw_keys.keys().collect();
+                        keys.sort();
+                        let mut kv = serde_json::Map::new();
+                        for k in keys {
+                            kv.insert(k.clone(), json!(hex::encode(&state.store.raw_keys[k])));
+                        }
+                        out.insert("store".into(), json!(kv));
+                    }
+                    Err(e) => {
+                        out.insert("ok".into(), json!(false));
+                        out.insert("err".into(), json!(e));
+                    }
+                }
+                Ok(serde_json::Value::Object(out))
             }
             "bp_debug" => {
                 let st = statement_from_in(inp)?;

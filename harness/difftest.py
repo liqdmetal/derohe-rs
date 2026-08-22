@@ -903,13 +903,110 @@ def main():
     go_k = run_oracle(GO_ORACLE, phase_k)
     rust_k = run_oracle(RUST_ORACLE, phase_k)
 
+    # ---- Phase L: DVM ------------------------------------------------------
+    # parse + run smart contracts (deterministic RND, gas, store commits)
+    phase_l = []
+    iid = 4000000
+
+    def add_l(op, inp):
+        nonlocal iid
+        phase_l.append({"id": iid, "op": op, "in": inp})
+        iid += 1
+
+    contracts = {
+        "hello": r"""Function hello() Uint64
+10 RETURN 0
+End Function""",
+        "math": r"""Function compute(a Uint64, b Uint64) Uint64
+10 DIM x AS Uint64
+20 LET x = a * b + 1
+30 IF x > 100 THEN GOTO 60
+40 RETURN 0
+60 RETURN 1
+End Function""",
+        "store": r"""Function Initialize() Uint64
+10 STORE("owner", SIGNER())
+20 RETURN 0
+End Function""",
+        "branch": r"""Function test(value Uint64) Uint64
+10 IF value == 0 THEN GOTO 30 ELSE GOTO 40
+30 RETURN 5
+40 RETURN 7
+End Function""",
+        "strings": r"""Function greet(name String) String
+10 DIM msg AS String
+20 LET msg = "hello " + name
+30 RETURN msg
+End Function""",
+        "random": r"""Function roll() Uint64
+10 DIM r AS Uint64
+20 LET r = RANDOM(100)
+30 RETURN r
+End Function""",
+        "nested": r"""Function Outer() Uint64
+10 DIM x AS Uint64
+20 LET x = Inner(5)
+30 RETURN x
+End Function
+Function Inner(v Uint64) Uint64
+10 RETURN v * 2
+End Function""",
+        "loops": r"""Function count() Uint64
+10 DIM i AS Uint64
+20 LET i = 0
+30 LET i = i + 1
+40 IF i < 10 THEN GOTO 30
+50 RETURN i
+End Function""",
+        "assets": r"""Function bal() Uint64
+10 RETURN DEROVALUE()
+End Function""",
+    }
+
+    for name, code in contracts.items():
+        scid = rng.randrange(0, 2**128)
+        scidh = "%064x" % scid
+        blid = rng.randrange(0, 2**128)
+        blidh = "%064x" % blid
+        txid = rng.randrange(0, 2**128)
+        txidh = "%064x" % txid
+        add_l("dvm_parse", {"code": code})
+        # run the main entrypoint (capitalized) with a couple params
+        entry = name
+        params = {}
+        if name == "math":
+            params = {"a": str(rng.randrange(1, 100)), "b": str(rng.randrange(1, 100))}
+        elif name == "branch":
+            params = {"value": str(rng.randrange(0, 2))}
+        elif name == "strings":
+            params = {"name": "world"}
+        add_l("dvm_run", {
+            "code": code, "entrypoint": entry, "params": params,
+            "scid": scidh, "blid": blidh, "txid": txidh,
+            "height": str(rng.randrange(0, 1000000)),
+            "timestamp": str(rng.randrange(1000000000, 2000000000)),
+            "signer": "%066x" % rng.randrange(0, 2**256),
+        })
+
+    # deterministic RND vectors
+    for _ in range(3):
+        add_l("dvm_rnd", {
+            "scid": "%064x" % rng.randrange(0, 2**128),
+            "blid": "%064x" % rng.randrange(0, 2**128),
+            "txid": "%064x" % rng.randrange(0, 2**128),
+            "n": "8",
+        })
+
+    go_l = run_oracle(GO_ORACLE, phase_l)
+    rust_l = run_oracle(RUST_ORACLE, phase_l)
+
     # ---- compare -----------------------------------------------------------
     failures = []
     per_op = {}
 
     def check(resp_go, resp_rust):
         op = None
-        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k):
+        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l):
             if r["id"] == resp_go["id"]:
                 op = r["op"]
                 break
@@ -923,7 +1020,7 @@ def main():
             failures.append((op, resp_go["id"], f"expected x>=p divergence, got go={g_ok} rust={r_ok}"))
             return
         if g_ok != r_ok:
-            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k) if r["id"] == resp_go["id"]), None)
+            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l) if r["id"] == resp_go["id"]), None)
             failures.append(
                 (op, resp_go["id"], f"ok mismatch: go={g_ok} rust={r_ok} "
                  f"go_err={resp_go.get('err')} rust_err={resp_rust.get('err')} req={json.dumps(req)}")
@@ -935,7 +1032,7 @@ def main():
             go_out = {k: v for k, v in resp_go["out"].items() if not k.startswith("snap_")}
             rust_out = {k: v for k, v in resp_rust["out"].items() if not k.startswith("snap_")}
             if go_out != rust_out:
-                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k) if r["id"] == resp_go["id"]), None)
+                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l) if r["id"] == resp_go["id"]), None)
                 failures.append(
                     (op, resp_go["id"], f"out mismatch:\n  go:   {json.dumps(go_out)}\n  rust: {json.dumps(rust_out)}\n  req:  {json.dumps(req)}")
                 )
@@ -963,6 +1060,8 @@ def main():
         check(go_j[r["id"]], rust_j[r["id"]])
     for r in phase_k:
         check(go_k[r["id"]], rust_k[r["id"]])
+    for r in phase_l:
+        check(go_l[r["id"]], rust_l[r["id"]])
 
     # valid-tx cross-accept: each side must ACCEPT the other's proof
     for cid, label, kind in cross_i_expect:
@@ -1006,7 +1105,7 @@ def main():
         else:
             failures.append(("proof_cross_verify", cid, f"missing cross-verify response go={g} rust={r}"))
 
-    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k)
+    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l)
     print(f"\n=== differential results: {total} vectors ===")
     for op, cnt in sorted(per_op.items()):
         print(f"  {op:32s} {cnt:4d}")

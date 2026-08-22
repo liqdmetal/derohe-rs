@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"os"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/deroproject/derohe/block"
 	"github.com/deroproject/derohe/cryptography/bn256"
 	"github.com/deroproject/derohe/cryptography/crypto"
+	"github.com/deroproject/derohe/dvm"
 	"github.com/deroproject/derohe/rpc"
 	"github.com/deroproject/derohe/transaction"
 )
@@ -889,6 +891,16 @@ func buildValidTx(in map[string]json.RawMessage, ring []*bn256.G1, sk *big.Int, 
 	proof := crypto.OracleGenerateProof(scid, 0, s, w, u, txid, burn)
 	tx.Payloads[0].Proof = proof
 	return tx, nil
+}
+
+func optionalStr(in map[string]json.RawMessage, k, dflt string) string {
+	if v, ok := in[k]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			return s
+		}
+	}
+	return dflt
 }
 
 func handle(id int, op string, raw json.RawMessage) {
@@ -2458,6 +2470,159 @@ func handle(id int, op string, raw json.RawMessage) {
 		target := new(big.Int).Div(oneLsh256, d)
 		valid := powHashBig.Cmp(target) <= 0
 		ok(id, map[string]interface{}{"valid": valid})
+
+	// ---- Phase 9: DVM ----------------------------------------------------
+
+	case "dvm_parse":
+		code, err := str(in, "code")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		sc, _, perr := dvm.ParseSmartContract(code)
+		if perr != nil {
+			ok(id, map[string]interface{}{"ok": false, "err": perr.Error()})
+			return
+		}
+		names := []string{}
+		for name := range sc.Functions {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		out := map[string]interface{}{"ok": true, "functions": names}
+		for _, name := range names {
+			f := sc.Functions[name]
+			paramtypes := []string{}
+			for _, p := range f.Params {
+				paramtypes = append(paramtypes, fmt.Sprintf("%d", p.Type))
+			}
+			lines := []string{}
+			for _, ln := range f.LineNumbers {
+				lines = append(lines, fmt.Sprintf("%d:%s", ln, strings.Join(f.Lines[ln], " ")))
+			}
+			out["fn_"+name] = map[string]interface{}{
+				"ret":    fmt.Sprintf("%d", f.ReturnValue.Type),
+				"params": paramtypes,
+				"lines":  lines,
+			}
+		}
+		ok(id, out)
+
+	case "dvm_rnd":
+		scidS, _ := str(in, "scid")
+		blidS, _ := str(in, "blid")
+		txidS, _ := str(in, "txid")
+		var scid, blid, txid crypto.Hash
+		if scidS != "" {
+			scidB, _ := unhex(scidS)
+			copy(scid[:], scidB)
+		}
+		if blidS != "" {
+			blidB, _ := unhex(blidS)
+			copy(blid[:], blidB)
+		}
+		if txidS != "" {
+			txidB, _ := unhex(txidS)
+			copy(txid[:], txidB)
+		}
+		r := dvm.Initialize_RND(scid, blid, txid)
+		n, _ := strconv.ParseUint(optionalStr(in, "n", "5"), 10, 64)
+		vals := []string{}
+		for i := uint64(0); i < n; i++ {
+			vals = append(vals, fmt.Sprintf("%d", r.Random()))
+		}
+		ok(id, map[string]interface{}{"vals": vals})
+
+	case "dvm_run":
+		code, err := str(in, "code")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		sc, _, perr := dvm.ParseSmartContract(code)
+		if perr != nil {
+			fail(id, perr)
+			return
+		}
+		var scid, blid, txid crypto.Hash
+		scidS, _ := str(in, "scid")
+		if scidS != "" {
+			scidB, _ := unhex(scidS)
+			copy(scid[:], scidB)
+		}
+		blidS, _ := str(in, "blid")
+		if blidS != "" {
+			blidB, _ := unhex(blidS)
+			copy(blid[:], blidB)
+		}
+		txidS, _ := str(in, "txid")
+		if txidS != "" {
+			txidB, _ := unhex(txidS)
+			copy(txid[:], txidB)
+		}
+		entrypoint, _ := str(in, "entrypoint")
+		params := map[string]interface{}{}
+		if pr, ok := in["params"]; ok {
+			var pm map[string]interface{}
+			json.Unmarshal(pr, &pm)
+			for k, v := range pm {
+				params[k] = v
+			}
+		}
+		height, _ := strconv.ParseUint(optionalStr(in, "height", "0"), 10, 64)
+		ts, _ := strconv.ParseUint(optionalStr(in, "timestamp", "0"), 10, 64)
+		state := &dvm.Shared_State{
+			SCIDZERO:        [32]byte{},
+			SCIDSELF:        scid,
+			GasComputeLimit: 10000000,
+			GasComputeCheck: true,
+			Chain_inputs: &dvm.Blockchain_Input{
+				SCID: scid, BLID: blid, TXID: txid, BL_HEIGHT: height, BL_TIMESTAMP: ts,
+				Signer: optionalStr(in, "signer", ""),
+			},
+			Assets:          map[crypto.Hash]uint64{},
+			RamStore:        map[dvm.Variable]dvm.Variable{},
+			RND:             dvm.Initialize_RND(scid, blid, txid),
+			Store:           dvm.Initialize_TX_store(),
+			Assets_Transfer: map[string]map[string]uint64{},
+		}
+		state.Store.State = state
+		result, rerr := dvm.RunSmartContract(&sc, entrypoint, state, params)
+		if rerr != nil {
+			ok(id, map[string]interface{}{
+				"ok":          false,
+				"err":         rerr.Error(),
+				"gas_compute": fmt.Sprintf("%d", state.GasComputeUsed),
+				"gas_storage": fmt.Sprintf("%d", state.GasStoreUsed),
+				"ops":         fmt.Sprintf("%d", state.Monitor_ops),
+				"lines":       fmt.Sprintf("%d", state.Monitor_lines_interpreted),
+			})
+			return
+		}
+		out := map[string]interface{}{
+			"ok":          true,
+			"ret_type":    fmt.Sprintf("%d", result.Type),
+			"gas_compute": fmt.Sprintf("%d", state.GasComputeUsed),
+			"gas_storage": fmt.Sprintf("%d", state.GasStoreUsed),
+			"ops":         fmt.Sprintf("%d", state.Monitor_ops),
+			"lines":       fmt.Sprintf("%d", state.Monitor_lines_interpreted),
+		}
+		if result.Type == dvm.Uint64 {
+			out["ret"] = fmt.Sprintf("%d", result.ValueUint64)
+		} else if result.Type == dvm.String {
+			out["ret"] = result.ValueString
+		}
+		keys := []string{}
+		for k := range state.Store.RawKeys {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		kv := map[string]string{}
+		for _, k := range keys {
+			kv[k] = hex.EncodeToString(state.Store.RawKeys[k])
+		}
+		out["store"] = kv
+		ok(id, out)
 
 	default:
 		fail(id, fmt.Errorf("unknown op %q", op))

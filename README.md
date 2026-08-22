@@ -4,7 +4,7 @@ Phase 0/1 spike: **differential testing harness + first crypto module**, proving
 that a Rust implementation can be verified byte-for-byte against the Go
 reference (`deroproject/derohe`) before we commit to the full port.
 
-**Status: PASS — 1,874 differential vectors (default run) + 44 unit tests,
+**Status: PASS — 1,895 differential vectors (default run) + 50 unit tests,
 byte-identical with the Go reference** (1 documented divergence, see below).
 Stress runs with 500 vectors/op exceed 3,800 vectors, all green.
 **MAINNET REPLAY: PASS — 29/29 blocks reproduce the live chain's BLIDs
@@ -50,6 +50,8 @@ crypto/            Rust crate (dero-crypto): clean-room implementation
   src/astrobwt.rs      AstroBWT PoW (POW32: Salsa20 + SA-IS + SHA3-256)
   src/astrobwt_v3.rs   AstroBWTv3 (current mainnet PoW: RC4 + 256-op obfuscation loop + SA-IS)
   src/astrobwt_v3_ops.rs generated 256-case op switch (tools/gen_astrobwt_v3_ops.py)
+  src/dvm.rs           DVM: tokenizer, parser, interpreter, 36 builtins, HSalsa20 RNG
+  src/rpc_addr.rs      bech32 DERO address <-> compressed key (DVM address builtins)
   src/bin/oracle.rs    Rust oracle: same JSONL protocol as oracle/
 harness/difftest.py Python differential tester (deterministic vectors)
 derohe-reference/  Reference Go source (gitignored; fetched via tarball —
@@ -96,6 +98,7 @@ Toolchain notes (Windows):
 | AstroBWT PoW | pow32 (random sizes, 9973 boundary, live block blobs) | byte-identical POW32 hashes (Salsa20 → SA-IS → SHA3-256) |
 | AstroBWTv3 PoW | pow_v3 + check_pow (random sizes, live post-HF2 block blobs) | byte-identical v3 hashes (RC4 + 256-op loop + SA-IS); difficulty-target check |
 | Chain PoW replay | replay_pow.py: live blocks' miniblocks | 90/90 miniblocks valid at the chain's difficulty (9 final blocks), Go agrees on every hash |
+| DVM | dvm_parse/dvm_run/dvm_rnd (9 contracts: math, store, branch, strings, random, nested, loops, assets) | byte-identical parse (functions/lines/params), execution (returns, gas compute+storage, ops, lines, store commits), deterministic RNG |
 | Errors | malformed deserialize (short/long/non-QR) | both sides reject identically |
 
 ## Reference quirks discovered (and replicated)
