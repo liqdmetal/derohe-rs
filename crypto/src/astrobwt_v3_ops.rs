@@ -2049,7 +2049,7 @@ pub fn apply_op(op: u8, s: &mut [u8; 256], pos1: usize, pos2: usize,
             }
         }
         254 => {
-            *rc4s = Rc4::new(s);;
+            *rc4s = Rc4::new(s);
             for i in pos1..pos2 {
                 s[i] ^= s[i].count_ones() as u8;
                 s[i] = s[i].rotate_left(3);
@@ -2058,7 +2058,7 @@ pub fn apply_op(op: u8, s: &mut [u8; 256], pos1: usize, pos2: usize,
             }
         }
         255 => {
-            *rc4s = Rc4::new(s);;
+            *rc4s = Rc4::new(s);
             for i in pos1..pos2 {
                 s[i] ^= s[i].count_ones() as u8;
                 s[i] = s[i].rotate_left(3);

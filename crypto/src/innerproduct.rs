@@ -13,7 +13,7 @@ use ark_ec::PrimeGroup;
 use ark_ff::{Field, PrimeField};
 use ark_ff::fields::AdditiveGroup;
 
-use crate::curve::{be32_to_bigint, encode_compressed, encode_uncompressed};
+use crate::curve::{encode_compressed, encode_uncompressed};
 use crate::fieldvector::{fr_from_be_bytes, fr_to_be_bytes, FieldVector};
 use crate::keccak::keccak256;
 use crate::pedersen::PedersenParams;
@@ -196,6 +196,7 @@ pub fn honest_p(params: &PedersenParams, as_: &FieldVector, bs: &FieldVector) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::curve::be32_to_bigint;
     use crate::pedersen::generator_params;
 
     fn mk(v: u64) -> [u8; 32] {

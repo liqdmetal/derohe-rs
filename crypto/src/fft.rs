@@ -8,10 +8,8 @@
 use ark_bn254::Fr;
 use ark_ff::{Field, One};
 
-use crate::curve::N_HEX;
 use crate::fieldvector::{fr_from_be_bytes, fr_to_be_bytes, FieldVector};
 use crate::pointvector::PointVector;
-use num_bigint::BigUint;
 
 pub const UNITY_HEX: &str = "14a3074b02521e3b1ed9852e5028452693e87be4e910500c7ba9bbddb2f46edd";
 
@@ -107,7 +105,7 @@ pub fn convolution(exponent: &FieldVector, base: &PointVector) -> PointVector {
 mod tests {
     use super::*;
     use crate::curve::N_HEX;
-
+    
     #[test]
     fn unity_is_primitive() {
         // unity^(2^28) == 1 mod n

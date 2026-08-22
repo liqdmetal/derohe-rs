@@ -1131,6 +1131,41 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 }
                 Ok(serde_json::Value::Object(out))
             }
+            "bech32_raw" => {
+                use dero_crypto::rpc_addr;
+                let addr = s("address")?;
+                match rpc_addr::address_to_compressed(&addr) {
+                    Ok(pk) => Ok(json!({"raw": hex::encode(pk)})),
+                    Err(_) => Ok(json!({"raw": ""})),
+                }
+            }
+            "bech32_string" => {
+                use dero_crypto::rpc_addr;
+                let raw = hex_decode(&s("raw")?)?;
+                // Go's NewAddressFromKeys requires the key to be a valid
+                // on-curve compressed point; invalid keys yield "".
+                let valid = raw.len() == 33 && dero_crypto::curve::decode_compressed(&raw).is_ok();
+                if !valid {
+                    return Ok(json!({"addr": ""}));
+                }
+                match rpc_addr::compressed_to_address(&raw) {
+                    Ok(addr) => Ok(json!({"addr": addr})),
+                    Err(_) => Ok(json!({"addr": ""})),
+                }
+            }
+            "bech32_valid" => {
+                use dero_crypto::rpc_addr;
+                let addr = s("address")?;
+                let valid = rpc_addr::address_to_compressed(&addr).is_ok();
+                Ok(json!({"valid": valid}))
+            }
+            "hexdecode" => {
+                let hx = s("hex")?;
+                match hex::decode(&hx) {
+                    Ok(b) => Ok(json!({"out": hex::encode(b)})),
+                    Err(e) => Err(e.to_string()),
+                }
+            }
             "bp_debug" => {
                 let st = statement_from_in(inp)?;
                 let rand = hex_decode(&s("rand")?)?;

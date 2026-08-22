@@ -82,6 +82,21 @@ def main():
     if not RUST_ORACLE.exists():
         sys.exit("rust oracle missing; run without --no-build")
 
+    def rpc_addr_valid(raw_hex):
+        """A compressed point is valid iff decode succeeds (matches Go's
+        DecodeCompressed in NewAddressFromKeys)."""
+        try:
+            b = bytes.fromhex(raw_hex)
+            if len(b) != 33:
+                return False
+            p = int.from_bytes(b[:32], 'big')
+            if p >= 21888242871839275222246405745257275088696311157297823662689037894645226208583:
+                return False
+            flag = b[32]
+            return flag in (0, 1)
+        except Exception:
+            return False
+
     rng = random.Random(0xD3F0C0DE)
     n = args.vectors
     edges = scalar_edges()
@@ -1000,13 +1015,54 @@ End Function""",
     go_l = run_oracle(GO_ORACLE, phase_l)
     rust_l = run_oracle(RUST_ORACLE, phase_l)
 
+    # ---- Phase M: bech32 + hash builtins (differential on the real scheme) --
+    # Round-trip real mainnet addresses + random valid compressed keys through
+    # both implementations. This differentially proves rpc_addr.rs (the DVM's
+    # address_raw/address_string/is_address_valid builtins) against rpc/bech32.go.
+    phase_m = []
+    iid = 5000000
+
+    def add_m(op, inp):
+        nonlocal iid
+        phase_m.append({"id": iid, "op": op, "in": inp})
+        iid += 1
+
+    # known addresses (the user's mainnet wallet + a couple variants)
+    known_addrs = [
+        "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq",
+        "dero1qyr8yjuh2zv85dvhphntdq24h2w2dcsy3v0hh7ckm6tlj54l5z4j7kqqkjy8s",
+    ]
+    for a in known_addrs:
+        add_m("bech32_raw", {"address": a})
+        add_m("bech32_valid", {"address": a})
+    # random valid keys -> address -> back (only keys that decode as valid
+    # compressed points — Go's NewAddressFromKeys needs a valid on-curve key)
+    for _ in range(10):
+        x = rng.randrange(0, 2**254)
+        flag = rng.randrange(0, 2)
+        raw = "%064x%02x" % (x, flag)
+        # only emit if it's a valid on-curve compressed point
+        if rpc_addr_valid(raw):
+            add_m("bech32_string", {"raw": raw})
+    # invalid addresses
+    add_m("bech32_valid", {"address": "dero1qinvalid"})
+    add_m("bech32_valid", {"address": "deto1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq"})
+    # hexdecode round-trips
+    for _ in range(4):
+        hx = "".join(rand32() for _ in range(2))
+        add_m("hexdecode", {"hex": hx})
+    add_m("hexdecode", {"hex": "zz"})
+
+    go_m = run_oracle(GO_ORACLE, phase_m)
+    rust_m = run_oracle(RUST_ORACLE, phase_m)
+
     # ---- compare -----------------------------------------------------------
     failures = []
     per_op = {}
 
     def check(resp_go, resp_rust):
         op = None
-        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l):
+        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m):
             if r["id"] == resp_go["id"]:
                 op = r["op"]
                 break
@@ -1020,7 +1076,7 @@ End Function""",
             failures.append((op, resp_go["id"], f"expected x>=p divergence, got go={g_ok} rust={r_ok}"))
             return
         if g_ok != r_ok:
-            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l) if r["id"] == resp_go["id"]), None)
+            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m) if r["id"] == resp_go["id"]), None)
             failures.append(
                 (op, resp_go["id"], f"ok mismatch: go={g_ok} rust={r_ok} "
                  f"go_err={resp_go.get('err')} rust_err={resp_rust.get('err')} req={json.dumps(req)}")
@@ -1032,7 +1088,7 @@ End Function""",
             go_out = {k: v for k, v in resp_go["out"].items() if not k.startswith("snap_")}
             rust_out = {k: v for k, v in resp_rust["out"].items() if not k.startswith("snap_")}
             if go_out != rust_out:
-                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l) if r["id"] == resp_go["id"]), None)
+                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m) if r["id"] == resp_go["id"]), None)
                 failures.append(
                     (op, resp_go["id"], f"out mismatch:\n  go:   {json.dumps(go_out)}\n  rust: {json.dumps(rust_out)}\n  req:  {json.dumps(req)}")
                 )
@@ -1062,6 +1118,8 @@ End Function""",
         check(go_k[r["id"]], rust_k[r["id"]])
     for r in phase_l:
         check(go_l[r["id"]], rust_l[r["id"]])
+    for r in phase_m:
+        check(go_m[r["id"]], rust_m[r["id"]])
 
     # valid-tx cross-accept: each side must ACCEPT the other's proof
     for cid, label, kind in cross_i_expect:
@@ -1105,7 +1163,7 @@ End Function""",
         else:
             failures.append(("proof_cross_verify", cid, f"missing cross-verify response go={g} rust={r}"))
 
-    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l)
+    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m)
     print(f"\n=== differential results: {total} vectors ===")
     for op, cnt in sorted(per_op.items()):
         print(f"  {op:32s} {cnt:4d}")

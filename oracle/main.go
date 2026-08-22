@@ -2624,6 +2624,63 @@ func handle(id int, op string, raw json.RawMessage) {
 		out["store"] = kv
 		ok(id, out)
 
+	// ---- Phase 10: DVM address/hash builtins (bech32 differential) --------
+
+	case "bech32_raw":
+		addr, err := str(in, "address")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		if a, err := rpc.NewAddress(addr); err == nil {
+			ok(id, map[string]interface{}{"raw": hex.EncodeToString(a.Compressed())})
+		} else {
+			ok(id, map[string]interface{}{"raw": ""})
+		}
+
+	case "bech32_string":
+		rawS, err := str(in, "raw")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		rawB, err := unhex(rawS)
+		if err != nil || len(rawB) != 33 {
+			fail(id, fmt.Errorf("raw must be 33 bytes"))
+			return
+		}
+		p := new(crypto.Point)
+		if err := p.DecodeCompressed(rawB); err != nil {
+			ok(id, map[string]interface{}{"addr": ""})
+			return
+		}
+		addr := rpc.NewAddressFromKeys(p)
+		ok(id, map[string]interface{}{"addr": addr.String()})
+
+	case "bech32_valid":
+		addr, err := str(in, "address")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		valid := false
+		if _, err := rpc.NewAddress(addr); err == nil {
+			valid = true
+		}
+		ok(id, map[string]interface{}{"valid": valid})
+
+	case "hexdecode":
+		hx, err := str(in, "hex")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		if b, err := hex.DecodeString(hx); err == nil {
+			ok(id, map[string]interface{}{"out": hex.EncodeToString(b)})
+		} else {
+			fail(id, err)
+		}
+
 	default:
 		fail(id, fmt.Errorf("unknown op %q", op))
 	}

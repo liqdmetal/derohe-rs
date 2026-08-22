@@ -4,9 +4,9 @@ Phase 0/1 spike: **differential testing harness + first crypto module**, proving
 that a Rust implementation can be verified byte-for-byte against the Go
 reference (`deroproject/derohe`) before we commit to the full port.
 
-**Status: PASS — 1,895 differential vectors (default run) + 50 unit tests,
+**Status: PASS — 1,913 differential vectors (default run) + 50 unit tests,
 byte-identical with the Go reference** (1 documented divergence, see below).
-Stress runs with 500 vectors/op exceed 3,800 vectors, all green.
+Stress runs with 500 vectors/op exceed 3,900 vectors, all green.
 **MAINNET REPLAY: PASS — 29/29 blocks reproduce the live chain's BLIDs
 byte-for-byte (genesis → height 7,511,601) and 29/29 miner-tx hashes match
 the chain**, verified against a public mainnet node via `harness/replay_mainnet.py`.
@@ -99,6 +99,7 @@ Toolchain notes (Windows):
 | AstroBWTv3 PoW | pow_v3 + check_pow (random sizes, live post-HF2 block blobs) | byte-identical v3 hashes (RC4 + 256-op loop + SA-IS); difficulty-target check |
 | Chain PoW replay | replay_pow.py: live blocks' miniblocks | 90/90 miniblocks valid at the chain's difficulty (9 final blocks), Go agrees on every hash |
 | DVM | dvm_parse/dvm_run/dvm_rnd (9 contracts: math, store, branch, strings, random, nested, loops, assets) | byte-identical parse (functions/lines/params), execution (returns, gas compute+storage, ops, lines, store commits), deterministic RNG |
+| Address/hash builtins | bech32_raw/bech32_string/bech32_valid/hexdecode | byte-identical bech32 encode/decode + compressed-key validation (caught: invalid keys must yield "", not an address); hexdecode parity |
 | Errors | malformed deserialize (short/long/non-QR) | both sides reject identically |
 
 ## Reference quirks discovered (and replicated)
