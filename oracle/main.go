@@ -21,10 +21,18 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"runtime/debug"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/deroproject/derohe/astrobwt"
+	"github.com/deroproject/derohe/astrobwt/astrobwtv3"
+	"github.com/deroproject/derohe/block"
 	"github.com/deroproject/derohe/cryptography/bn256"
 	"github.com/deroproject/derohe/cryptography/crypto"
+	"github.com/deroproject/derohe/rpc"
+	"github.com/deroproject/derohe/transaction"
 )
 
 type Request struct {
@@ -283,48 +291,604 @@ func statementFromIn(in map[string]json.RawMessage) (*crypto.Statement, *crypto.
 		return nil, nil, err
 	}
 	s.Fees = fees
-	// witness
+	// witness (optional: verify requests carry only the statement)
 	skHex, err := str(in, "secretkey")
-	if err != nil {
-		return nil, nil, err
-	}
-	sk, err := b32(skHex)
-	if err != nil {
-		return nil, nil, err
+	var sk *big.Int
+	if err == nil {
+		sk, err = b32(skHex)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		sk = new(big.Int)
 	}
 	rHex, err := str(in, "r")
-	if err != nil {
-		return nil, nil, err
-	}
-	rBig, err := b32(rHex)
-	if err != nil {
-		return nil, nil, err
+	var rBig *big.Int
+	if err == nil {
+		rBig, err = b32(rHex)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		rBig = new(big.Int)
 	}
 	trS, err := str(in, "transfer")
-	if err != nil {
-		return nil, nil, err
-	}
-	var transfer, balance uint64
-	if _, err := fmt.Sscanf(trS, "%d", &transfer); err != nil {
-		return nil, nil, err
+	var transfer uint64
+	if err == nil {
+		if _, err := fmt.Sscanf(trS, "%d", &transfer); err != nil {
+			return nil, nil, err
+		}
 	}
 	balS, err := str(in, "balance")
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := fmt.Sscanf(balS, "%d", &balance); err != nil {
-		return nil, nil, err
+	var balance uint64
+	if err == nil {
+		if _, err := fmt.Sscanf(balS, "%d", &balance); err != nil {
+			return nil, nil, err
+		}
 	}
 	idxRaw, ok := in["index"]
-	if !ok {
-		return nil, nil, fmt.Errorf("missing index")
-	}
 	var idx []int
-	if err := json.Unmarshal(idxRaw, &idx); err != nil {
-		return nil, nil, err
+	if ok {
+		if err := json.Unmarshal(idxRaw, &idx); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		idx = []int{0, 0}
 	}
 	w := &crypto.Witness{SecretKey: sk, R: rBig, TransferAmount: transfer, Balance: balance, Index: idx}
 	return s, w, nil
+}
+
+// rebuild a realistic statement: C[i] = r*pk_i + delta_i*G, D = r*G,
+// zero encrypted balances (CLn = C, CRn = D) — mirrors transaction_build.go
+func realisticStatement(s *crypto.Statement, w *crypto.Witness, burn uint64) {
+	n := len(s.Publickeylist)
+	var C []*bn256.G1
+	for i := range s.Publickeylist {
+		var x bn256.G1
+		switch {
+		case i == w.Index[0]:
+			x.ScalarMult(crypto.G, new(big.Int).SetInt64(0-int64(w.TransferAmount)-int64(s.Fees)-int64(burn)))
+		case i == w.Index[1]:
+			x.ScalarMult(crypto.G, new(big.Int).SetInt64(int64(w.TransferAmount)))
+		default:
+			x.ScalarMult(crypto.G, new(big.Int).SetInt64(0))
+		}
+		x.Add(new(bn256.G1).Set(&x), new(bn256.G1).ScalarMult(s.Publickeylist[i], w.R))
+		C = append(C, &x)
+	}
+	D := new(bn256.G1).ScalarMult(crypto.G, w.R)
+	s.C = C
+	s.D = D
+	s.CLn = make([]*bn256.G1, n)
+	s.CRn = make([]*bn256.G1, n)
+	for i := 0; i < n; i++ {
+		s.CLn[i] = s.C[i]
+		s.CRn[i] = s.D
+	}
+}
+
+// build a Transaction from JSON parts (mirrors txFromIn in the Rust oracle)
+func txFromIn(in map[string]json.RawMessage) (*transaction.Transaction, error) {
+	tx := &transaction.Transaction{}
+	uvar := func(k string) (uint64, error) {
+		s, err := str(in, k)
+		if err != nil {
+			return 0, err
+		}
+		var v uint64
+		if _, err := fmt.Sscanf(s, "%d", &v); err != nil {
+			return 0, err
+		}
+		return v, nil
+	}
+	hexBytes := func(k string, n int) ([]byte, error) {
+		s, err := str(in, k)
+		if err != nil {
+			return nil, err
+		}
+		b, err := unhex(s)
+		if err != nil {
+			return nil, err
+		}
+		if len(b) != n {
+			return nil, fmt.Errorf("%s: expected %d bytes, got %d", k, n, len(b))
+		}
+		return b, nil
+	}
+
+	var err error
+	if tx.Version, err = uvar("version"); err != nil {
+		return nil, err
+	}
+	if tx.SourceNetwork, err = uvar("source_network"); err != nil {
+		return nil, err
+	}
+	if tx.DestNetwork, err = uvar("dest_network"); err != nil {
+		return nil, err
+	}
+	tt, err := uvar("txtype")
+	if err != nil {
+		return nil, err
+	}
+	tx.TransactionType = transaction.TransactionType(tt)
+
+	if tt == uint64(transaction.PREMINE) || tt == uint64(transaction.SC_TX) {
+		if tx.Value, err = uvar("value"); err != nil {
+			return nil, err
+		}
+	}
+	if tt == uint64(transaction.PREMINE) || tt == uint64(transaction.COINBASE) || tt == uint64(transaction.REGISTRATION) {
+		b, err := hexBytes("miner_address", 33)
+		if err != nil {
+			return nil, err
+		}
+		copy(tx.MinerAddress[:], b)
+	}
+	if tt == uint64(transaction.REGISTRATION) {
+		b, err := hexBytes("c", 32)
+		if err != nil {
+			return nil, err
+		}
+		copy(tx.C[:], b)
+		b, err = hexBytes("s", 32)
+		if err != nil {
+			return nil, err
+		}
+		copy(tx.S[:], b)
+	}
+
+	if tt == uint64(transaction.BURN_TX) || tt == uint64(transaction.NORMAL) || tt == uint64(transaction.SC_TX) {
+		if tx.Height, err = uvar("height"); err != nil {
+			return nil, err
+		}
+		b, err := hexBytes("blid", 32)
+		if err != nil {
+			return nil, err
+		}
+		copy(tx.BLID[:], b)
+
+		payRaw, ok := in["payloads"]
+		if !ok {
+			return nil, fmt.Errorf("missing payloads")
+		}
+		var payList []json.RawMessage
+		if err := json.Unmarshal(payRaw, &payList); err != nil {
+			return nil, err
+		}
+		for _, pj := range payList {
+			var pin map[string]json.RawMessage
+			if err := json.Unmarshal(pj, &pin); err != nil {
+				return nil, err
+			}
+			var ap transaction.AssetPayload
+			burnS, err := str(pin, "burn")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := fmt.Sscanf(burnS, "%d", &ap.BurnValue); err != nil {
+				return nil, err
+			}
+			scidB, err := str(pin, "scid")
+			if err != nil {
+				return nil, err
+			}
+			scidBytes, err := unhex(scidB)
+			if err != nil || len(scidBytes) != 32 {
+				return nil, fmt.Errorf("payload scid")
+			}
+			copy(ap.SCID[:], scidBytes)
+			rpctS, err := str(pin, "rpctype")
+			if err != nil {
+				return nil, err
+			}
+			var rpct uint64
+			fmt.Sscanf(rpctS, "%d", &rpct)
+			ap.RPCType = byte(rpct)
+			rpcpayS, err := str(pin, "rpcpayload")
+			if err != nil {
+				return nil, err
+			}
+			rpcpayB, err := unhex(rpcpayS)
+			if err != nil {
+				return nil, err
+			}
+			if len(rpcpayB) != transaction.PAYLOAD_LIMIT {
+				return nil, fmt.Errorf("rpcpayload: expected %d bytes, got %d", transaction.PAYLOAD_LIMIT, len(rpcpayB))
+			}
+			ap.RPCPayload = rpcpayB
+
+			// statement: reuse statementFromIn + realisticStatement
+			stmtIn, ok := pin["statement"]
+			if !ok {
+				return nil, fmt.Errorf("payload statement missing")
+			}
+			var sim map[string]json.RawMessage
+			if err := json.Unmarshal(stmtIn, &sim); err != nil {
+				return nil, err
+			}
+			s, w, err := statementFromIn(sim)
+			if err != nil {
+				return nil, err
+			}
+			realisticStatement(s, w, ap.BurnValue)
+			ap.Statement = *s
+
+			// proof: serialized bytes -> Proof
+			proofS, err := str(pin, "proof")
+			if err != nil {
+				return nil, err
+			}
+			proofB, err := unhex(proofS)
+			if err != nil {
+				return nil, err
+			}
+			ring := len(ap.Statement.Publickeylist)
+			proof, err := crypto.OracleProofDeserialize(proofB, ring/2)
+			if err != nil {
+				return nil, err
+			}
+			ap.Proof = proof
+			tx.Payloads = append(tx.Payloads, ap)
+		}
+	}
+
+	if tt == uint64(transaction.SC_TX) {
+		scRaw, ok := in["scdata"]
+		if !ok {
+			return nil, fmt.Errorf("missing scdata")
+		}
+		var argList []map[string]string
+		if err := json.Unmarshal(scRaw, &argList); err != nil {
+			return nil, err
+		}
+		for _, a := range argList {
+			arg := rpc.Argument{Name: a["name"], DataType: rpc.DataType(a["datatype"])}
+			v := a["value"]
+			switch arg.DataType {
+			case rpc.DataString:
+				arg.Value = v
+			case rpc.DataInt64:
+				var x int64
+				fmt.Sscanf(v, "%d", &x)
+				arg.Value = x
+			case rpc.DataUint64:
+				var x uint64
+				fmt.Sscanf(v, "%d", &x)
+				arg.Value = x
+			case rpc.DataFloat64:
+				var x float64
+				fmt.Sscanf(v, "%f", &x)
+				arg.Value = x
+			case rpc.DataHash:
+				b, err := unhex(v)
+				if err != nil || len(b) != 32 {
+					return nil, fmt.Errorf("scdata hash")
+				}
+				var h crypto.Hash
+				copy(h[:], b)
+				arg.Value = h
+			case rpc.DataAddress:
+				b, err := unhex(v)
+				if err != nil || len(b) != 33 {
+					return nil, fmt.Errorf("scdata address")
+				}
+				p := new(crypto.Point)
+				if err := p.DecodeCompressed(b); err != nil {
+					return nil, err
+				}
+				arg.Value = rpc.Address{PublicKey: p}
+			case rpc.DataTime:
+				t, err := time.Parse(time.RFC3339Nano, v)
+				if err != nil {
+					return nil, err
+				}
+				arg.Value = t
+			default:
+				return nil, fmt.Errorf("unknown scdata datatype %s", arg.DataType)
+			}
+			tx.SCDATA = append(tx.SCDATA, arg)
+		}
+	}
+	return tx, nil
+}
+
+// ---- Phase 7: block serialization ----------------------------------------
+
+func miniBlockFromIn(in map[string]json.RawMessage) (*block.MiniBlock, error) {
+	m := &block.MiniBlock{}
+	u8 := func(k string) (uint8, error) {
+		s, err := str(in, k)
+		if err != nil {
+			return 0, err
+		}
+		var v uint64
+		fmt.Sscanf(s, "%d", &v)
+		return uint8(v), nil
+	}
+	u64 := func(k string) (uint64, error) {
+		s, err := str(in, k)
+		if err != nil {
+			return 0, err
+		}
+		var v uint64
+		fmt.Sscanf(s, "%d", &v)
+		return v, nil
+	}
+	var err error
+	if m.Version, err = u8("version"); err != nil {
+		return nil, err
+	}
+	m.HighDiff = false
+	m.Final = false
+	if hd, ok := in["highdiff"]; ok {
+		m.HighDiff = string(hd) == "true"
+	}
+	if f, ok := in["final"]; ok {
+		m.Final = string(f) == "true"
+	}
+	if m.PastCount, err = u8("pastcount"); err != nil {
+		return nil, err
+	}
+	if m.Timestamp, err = func() (uint16, error) {
+		v, e := u64("timestamp")
+		return uint16(v), e
+	}(); err != nil {
+		return nil, err
+	}
+	if m.Height, err = u64("height"); err != nil {
+		return nil, err
+	}
+	pastRaw, ok := in["past"]
+	if !ok {
+		return nil, fmt.Errorf("missing past")
+	}
+	var pastHex []string
+	if err := json.Unmarshal(pastRaw, &pastHex); err != nil {
+		return nil, err
+	}
+	for i := 0; i < 2; i++ {
+		if i < len(pastHex) {
+			var v uint64
+			fmt.Sscanf(pastHex[i], "%d", &v)
+			m.Past[i] = uint32(v)
+		}
+	}
+	khS, err := str(in, "keyhash")
+	if err != nil {
+		return nil, err
+	}
+	khB, err := unhex(khS)
+	if err != nil || len(khB) != 32 {
+		return nil, fmt.Errorf("keyhash must be 32 bytes")
+	}
+	copy(m.KeyHash[:], khB)
+	if m.Flags, err = func() (uint32, error) {
+		v, e := u64("flags")
+		return uint32(v), e
+	}(); err != nil {
+		return nil, err
+	}
+	nonceRaw, ok := in["nonce"]
+	if !ok {
+		return nil, fmt.Errorf("missing nonce")
+	}
+	var nonceHex []string
+	if err := json.Unmarshal(nonceRaw, &nonceHex); err != nil {
+		return nil, err
+	}
+	for i := 0; i < 3; i++ {
+		if i < len(nonceHex) {
+			var v uint64
+			fmt.Sscanf(nonceHex[i], "%d", &v)
+			m.Nonce[i] = uint32(v)
+		}
+	}
+	return m, nil
+}
+
+func blockFromIn(in map[string]json.RawMessage) (*block.Block, error) {
+	bl := &block.Block{}
+	u64 := func(k string) (uint64, error) {
+		s, err := str(in, k)
+		if err != nil {
+			return 0, err
+		}
+		var v uint64
+		fmt.Sscanf(s, "%d", &v)
+		return v, nil
+	}
+	var err error
+	if bl.Major_Version, err = u64("major"); err != nil {
+		return nil, err
+	}
+	if bl.Minor_Version, err = u64("minor"); err != nil {
+		return nil, err
+	}
+	if bl.Timestamp, err = u64("timestamp"); err != nil {
+		return nil, err
+	}
+	if bl.Height, err = u64("height"); err != nil {
+		return nil, err
+	}
+	txRaw, ok := in["miner_tx"]
+	if !ok {
+		return nil, fmt.Errorf("missing miner_tx")
+	}
+	var txIn map[string]json.RawMessage
+	if err := json.Unmarshal(txRaw, &txIn); err != nil {
+		return nil, err
+	}
+	tx, err := txFromIn(txIn)
+	if err != nil {
+		return nil, err
+	}
+	bl.Miner_TX = *tx
+
+	proofS, err := str(in, "proof")
+	if err != nil {
+		return nil, err
+	}
+	proofB, err := unhex(proofS)
+	if err != nil || len(proofB) != 32 {
+		return nil, fmt.Errorf("proof must be 32 bytes")
+	}
+	copy(bl.Proof[:], proofB)
+
+	tipsRaw, ok := in["tips"]
+	if ok {
+		var tipsHex []string
+		if err := json.Unmarshal(tipsRaw, &tipsHex); err != nil {
+			return nil, err
+		}
+		for _, h := range tipsHex {
+			b, err := unhex(h)
+			if err != nil || len(b) != 32 {
+				return nil, fmt.Errorf("tip must be 32 bytes")
+			}
+			var hh crypto.Hash
+			copy(hh[:], b)
+			bl.Tips = append(bl.Tips, hh)
+		}
+	}
+	mblRaw, ok := in["miniblocks"]
+	if ok {
+		var mblList []json.RawMessage
+		if err := json.Unmarshal(mblRaw, &mblList); err != nil {
+			return nil, err
+		}
+		for _, mj := range mblList {
+			var min map[string]json.RawMessage
+			if err := json.Unmarshal(mj, &min); err != nil {
+				return nil, err
+			}
+			m, err := miniBlockFromIn(min)
+			if err != nil {
+				return nil, err
+			}
+			bl.MiniBlocks = append(bl.MiniBlocks, *m)
+		}
+	}
+	txHRaw, ok := in["tx_hashes"]
+	if ok {
+		var txHHex []string
+		if err := json.Unmarshal(txHRaw, &txHHex); err != nil {
+			return nil, err
+		}
+		for _, h := range txHHex {
+			b, err := unhex(h)
+			if err != nil || len(b) != 32 {
+				return nil, fmt.Errorf("tx_hash must be 32 bytes")
+			}
+			var hh crypto.Hash
+			copy(hh[:], b)
+			bl.Tx_hashes = append(bl.Tx_hashes, hh)
+		}
+	}
+	return bl, nil
+}
+
+// build a VALID statement + tx exactly like walletapi/transaction_build.go:
+//   C[i]  = delta_i*G + r*pk_i           (delta: -v-fees-burn, +v, 0)
+//   D     = r*G
+//   ebalance[i] = Enc(pk_i, balance_i) = (balance_i*G + eblind_i*pk_i, eblind_i*G)
+//   CLn[i] = ebalance[i].Left + C[i]
+//   CRn[i] = ebalance[i].Right + D
+// with sender balance = value + fees + burn, so the verify algebra cancels.
+// Deterministic: RANDOM_OVERRIDE supplies the proof randomness.
+func buildValidTx(in map[string]json.RawMessage, ring []*bn256.G1, sk *big.Int, r *big.Int, value, fees, burn uint64, balance []*big.Int, eblind []*big.Int, randHex string) (*transaction.Transaction, error) {
+	randBytes, err := unhex(randHex)
+	if err != nil {
+		return nil, err
+	}
+	crypto.OracleSetRandomOverride(randBytes)
+	defer crypto.OracleSetRandomOverride(nil)
+
+	n := len(ring)
+	C := make([]*bn256.G1, n)
+	ebalance := make([]*crypto.ElGamal, n)
+	CLn := make([]*bn256.G1, n)
+	CRn := make([]*bn256.G1, n)
+	for i := 0; i < n; i++ {
+		var delta *big.Int
+		if i == 0 { // sender
+			delta = new(big.Int).Neg(new(big.Int).SetUint64(value + fees + burn))
+		} else if i == 1 { // receiver
+			delta = new(big.Int).SetUint64(value)
+		} else {
+			delta = new(big.Int)
+		}
+		x := new(bn256.G1).ScalarMult(crypto.G, delta)
+		x.Add(x, new(bn256.G1).ScalarMult(ring[i], r))
+		C[i] = x
+
+		// ebalance: Enc(pk_i, balance_i) with blinder eblind[i]
+		l := new(bn256.G1).ScalarMult(crypto.G, balance[i])
+		l.Add(l, new(bn256.G1).ScalarMult(ring[i], eblind[i]))
+		rr := new(bn256.G1).ScalarMult(crypto.G, eblind[i])
+		ebalance[i] = crypto.ConstructElGamal(l, rr)
+
+		CLn[i] = new(bn256.G1).Add(ebalance[i].Left, C[i])
+		CRn[i] = new(bn256.G1).Add(ebalance[i].Right, new(bn256.G1).ScalarMult(crypto.G, r))
+	}
+	D := new(bn256.G1).ScalarMult(crypto.G, r)
+
+	roothashS, err := str(in, "roothash")
+	if err != nil {
+		return nil, err
+	}
+	roothashB, err := unhex(roothashS)
+	if err != nil || len(roothashB) != 32 {
+		return nil, fmt.Errorf("roothash must be 32 bytes")
+	}
+	var roothash crypto.Hash
+	copy(roothash[:], roothashB)
+
+	// statement (Publickeylist full — needed for GenerateProof)
+	s := &crypto.Statement{
+		CLn: CLn, CRn: CRn, Publickeylist: ring, C: C, D: D,
+		Roothash: roothash, Fees: fees, Bytes_per_publickey: 3,
+	}
+	w := &crypto.Witness{SecretKey: sk, R: r, TransferAmount: value, Balance: value + fees + burn, Index: []int{0, 1}}
+
+	var scid crypto.Hash
+	copy(scid[:], []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	scidS, err := str(in, "scid")
+	if err == nil {
+		scidB, _ := unhex(scidS)
+		if len(scidB) == 32 {
+			copy(scid[:], scidB)
+		}
+	}
+	// u = upoint * sender_secret (walletapi/transaction_build.go:266) — NOT a
+	// random point. The verifier's A_u = upoint*s_sk + u*c_neg only cancels
+	// with the prover's committed A_u = upoint*k_sk when u = upoint*sk.
+	scid_index := 0
+	uinput := append([]byte(crypto.PROTOCOL_CONSTANT), roothash[:]...)
+	uinput = append(uinput, scid[:]...)
+	uinput = append(uinput, []byte(strconv.Itoa(scid_index))...)
+	upoint := crypto.HashToPoint(crypto.HashtoNumber(uinput))
+	u := new(bn256.G1).ScalarMult(upoint, sk)
+
+	// witness.Balance = REMAINING balance after the transfer
+	// (transaction_build.go:236: balance - value - fees - burn)
+	remaining := balance[0].Uint64() - value - fees - burn
+	w = &crypto.Witness{SecretKey: sk, R: r, TransferAmount: value, Balance: remaining, Index: []int{0, 1}}
+	ap := transaction.AssetPayload{
+		SCID: scid, BurnValue: burn, RPCType: 0,
+		RPCPayload: make([]byte, transaction.PAYLOAD_LIMIT),
+		Statement:  *s,
+	}
+	tx := &transaction.Transaction{}
+	tx.Version = 1
+	tx.TransactionType = transaction.NORMAL
+	tx.Height = 0
+	tx.Payloads = []transaction.AssetPayload{ap}
+	txid := tx.GetHash()
+
+	proof := crypto.OracleGenerateProof(scid, 0, s, w, u, txid, burn)
+	tx.Payloads[0].Proof = proof
+	return tx, nil
 }
 
 func handle(id int, op string, raw json.RawMessage) {
@@ -1042,11 +1606,6 @@ func handle(id int, op string, raw json.RawMessage) {
 	// ---- Phase 4: aggregate bulletproof (GenerateProof/Verify) ------------
 
 	case "proof_generate":
-		s, w, err := statementFromIn(in)
-		if err != nil {
-			fail(id, err)
-			return
-		}
 		// deterministic randomness: the harness supplies the byte stream
 		// consumed by the 11 RandomScalarFixed calls (sL, sR, aa, phi/chi/psi,
 		// k_sk/k_r/k_b/k_tau) + CommitElGamal random values (all via
@@ -1118,14 +1677,24 @@ func handle(id int, op string, raw json.RawMessage) {
 			fail(id, err)
 			return
 		}
-		proof := crypto.OracleGenerateProof(scid, scidIdx, s, w, u, txid, burn)
+		// generate with the realistic statement (amount-structured C/D)
+		sReal, wReal, err := statementFromIn(in)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		realisticStatement(sReal, wReal, burn)
+		proof := crypto.OracleGenerateProof(scid, scidIdx, sReal, wReal, u, txid, burn)
 		ser := crypto.OracleProofSerialize(proof)
 		nonce := crypto.OracleProofNonce(proof)
 		parity := crypto.OracleProofParity(proof)
+		// in-process self-verify (no deserialize): isolates equation vs roundtrip
+		self_ok, _ := crypto.OracleVerifyProof(crypto.ZEROHASH, scid, scidIdx, sReal, proof, txid, burn)
 		ok(id, map[string]interface{}{
 			"proof": hx(ser),
 			"nonce": hx(nonce[:]),
 			"parity": parity,
+			"self_verified": self_ok,
 		})
 
 	case "bp_debug":
@@ -1146,11 +1715,170 @@ func handle(id int, op string, raw json.RawMessage) {
 		}
 		ok(id, crypto.OracleBPDebug(s, w, randBytes))
 
-	case "proof_verify":
-		s, _, err := statementFromIn(in)
+	case "proof_verify_trace":
+		s, w, err := statementFromIn(in)
 		if err != nil {
 			fail(id, err)
 			return
+		}
+		// verbatim statement support (like proof_verify)
+		burnS2, _ := str(in, "burn")
+		var burn2 uint64
+		fmt.Sscanf(burnS2, "%d", &burn2)
+		if _, hasCln := in["cln"]; hasCln {
+			for _, key := range []string{"cln", "crn", "c"} {
+				raw, ok := in[key]
+				if !ok {
+					fail(id, fmt.Errorf("missing %s", key))
+					return
+				}
+				var hexes []string
+				if err := json.Unmarshal(raw, &hexes); err != nil {
+					fail(id, err)
+					return
+				}
+				var list []*bn256.G1
+				for _, h := range hexes {
+					p, err := decPoint(h)
+					if err != nil {
+						fail(id, err)
+						return
+					}
+					list = append(list, p)
+				}
+				switch key {
+				case "cln":
+					s.CLn = list
+				case "crn":
+					s.CRn = list
+				case "c":
+					s.C = list
+				}
+			}
+			dHex, err := str(in, "d")
+			if err != nil {
+				fail(id, err)
+				return
+			}
+			s.D, err = decPoint(dHex)
+			if err != nil {
+				fail(id, err)
+				return
+			}
+		} else {
+			realisticStatement(s, w, burn2)
+		}
+		proofHex, err := str(in, "proof")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		proofBytes, err := unhex(proofHex)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		length := len(s.Publickeylist) / 2
+		proof, err := crypto.OracleProofDeserialize(proofBytes, length)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		txidHex, err := str(in, "txid")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		txidBytes, err := unhex(txidHex)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var txid crypto.Hash
+		copy(txid[:], txidBytes[:32])
+		burnS, err := str(in, "burn")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var burn uint64
+		if _, err := fmt.Sscanf(burnS, "%d", &burn); err != nil {
+			fail(id, err)
+			return
+		}
+		scidHex, err := str(in, "scid")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		scidBytes, err := unhex(scidHex)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var scidV crypto.Hash
+		copy(scidV[:], scidBytes[:32])
+		scidIdxS, err := str(in, "scid_index")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var scidIdxV int
+		if _, err := fmt.Sscanf(scidIdxS, "%d", &scidIdxV); err != nil {
+			fail(id, err)
+			return
+		}
+		ok(id, crypto.OracleVerifyTrace(s, proof, txid, burn, scidV, scidIdxV))
+
+	case "proof_verify":
+		s, w, err := statementFromIn(in)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		// when the full statement (cln/crn/c/d) is supplied, use it verbatim
+		// (valid-tx accept testing) instead of rebuilding from the witness
+		_, hasCln := in["cln"]
+		if hasCln {
+			for _, key := range []string{"cln", "crn", "c"} {
+				raw, ok := in[key]
+				if !ok {
+					fail(id, fmt.Errorf("missing %s", key))
+					return
+				}
+				var hexes []string
+				if err := json.Unmarshal(raw, &hexes); err != nil {
+					fail(id, err)
+					return
+				}
+				var list []*bn256.G1
+				for _, h := range hexes {
+					p, err := decPoint(h)
+					if err != nil {
+						fail(id, err)
+						return
+					}
+					list = append(list, p)
+				}
+				switch key {
+				case "cln":
+					s.CLn = list
+				case "crn":
+					s.CRn = list
+				case "c":
+					s.C = list
+				}
+			}
+			dHex, err := str(in, "d")
+			if err != nil {
+				fail(id, err)
+				return
+			}
+			s.D, err = decPoint(dHex)
+			if err != nil {
+				fail(id, err)
+				return
+			}
 		}
 		proofHex, err := str(in, "proof")
 		if err != nil {
@@ -1212,8 +1940,524 @@ func handle(id int, op string, raw json.RawMessage) {
 			fail(id, err)
 			return
 		}
+		if !hasCln {
+			realisticStatement(s, w, burn)
+		}
 		verified, _ := crypto.OracleVerifyProof(crypto.ZEROHASH, scid, scidIdx, s, proof, txid, burn)
 		ok(id, map[string]interface{}{"verified": verified})
+
+	// ---- Phase 5: balance serialization (NonceBalance) --------------------
+
+	case "noncebalance_marshal":
+		nhS, err := str(in, "nonceheight")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var nh uint64
+		if _, err := fmt.Sscanf(nhS, "%d", &nh); err != nil {
+			fail(id, err)
+			return
+		}
+		balHex, err := str(in, "balance")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		balBytes, err := unhex(balHex)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		if len(balBytes) != 66 {
+			fail(id, fmt.Errorf("expected 66 bytes, got %d", len(balBytes)))
+			return
+		}
+		var bal crypto.ElGamal
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fail(id, fmt.Errorf("panic: %v", r))
+				}
+			}()
+			bal = *new(crypto.ElGamal).Deserialize(balBytes)
+		}()
+		if bal.Left == nil {
+			return
+		}
+		nb := &crypto.NonceBalance{NonceHeight: nh, Balance: &bal}
+		ok(id, map[string]interface{}{"bytes": hx(nb.Marshal())})
+
+	case "noncebalance_unmarshal":
+		hexS, err := str(in, "bytes")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		b, err := unhex(hexS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var nb crypto.NonceBalance
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fail(id, fmt.Errorf("panic: %v", r))
+				}
+			}()
+			nb = *new(crypto.NonceBalance).Unmarshal(b)
+		}()
+		if nb.Balance == nil {
+			return
+		}
+		ok(id, map[string]interface{}{
+			"nonceheight": nb.NonceHeight,
+			"balance":     hx(nb.Balance.Serialize()),
+		})
+
+	case "noncebalance_unmarshal_nonce":
+		hexS, err := str(in, "bytes")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		b, err := unhex(hexS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var nb crypto.NonceBalance
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fail(id, fmt.Errorf("panic: %v", r))
+				}
+			}()
+			nb.UnmarshalNonce(b)
+		}()
+		ok(id, map[string]interface{}{"nonceheight": nb.NonceHeight})
+
+	// ---- Phase 6: transaction serialization -------------------------------
+
+	case "tx_serialize":
+		tx, err := txFromIn(in)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var ser, header, core, hash []byte
+		panicked := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					fail(id, fmt.Errorf("panic: %v", r))
+				}
+			}()
+			ser = tx.Serialize()
+			header = tx.SerializeHeader()
+			core = tx.SerializeCoreStatement()
+			h := tx.GetHash()
+			hash = h[:]
+		}()
+		if panicked {
+			return
+		}
+		ok(id, map[string]interface{}{
+			"bytes": hx(ser), "header": hx(header), "core": hx(core), "hash": hx(hash),
+		})
+
+	case "tx_deserialize":
+		hexS, err := str(in, "bytes")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		b, err := unhex(hexS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var tx transaction.Transaction
+		var derr error
+		panicked := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					fail(id, fmt.Errorf("panic: %v", r))
+				}
+			}()
+			derr = tx.Deserialize(b)
+		}()
+		if panicked {
+			return
+		}
+		if derr != nil {
+			fail(id, derr)
+			return
+		}
+		if tx.Version == 0 && len(tx.Payloads) == 0 && tx.TransactionType == 0 {
+			return
+		}
+		var ser []byte
+		var h crypto.Hash
+		panicked = false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					fail(id, fmt.Errorf("panic: %v", r))
+				}
+			}()
+			ser = tx.Serialize()
+			h = tx.GetHash()
+		}()
+		if panicked {
+			return
+		}
+		ok(id, map[string]interface{}{"bytes": hx(ser), "hash": hx(h[:])})
+
+	// ---- Phase 7: block serialization -------------------------------------
+
+	case "block_serialize":
+		bl, err := blockFromIn(in)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var ser, serSkip, hash, hashSkip, tipsHash, txsHash []byte
+		panicked := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					fail(id, fmt.Errorf("panic: %v", r))
+				}
+			}()
+			ser = bl.Serialize()
+			serSkip = bl.SerializeWithoutLastMiniBlock()
+			h := bl.GetHash()
+			hash = h[:]
+			h2 := bl.GetHashSkipLastMiniBlock()
+			hashSkip = h2[:]
+			h3 := bl.GetTipsHash()
+			tipsHash = h3[:]
+			h4 := bl.GetTXSHash()
+			txsHash = h4[:]
+		}()
+		if panicked {
+			return
+		}
+		ok(id, map[string]interface{}{
+			"bytes": hx(ser), "bytes_skip_last": hx(serSkip),
+			"hash": hx(hash), "hash_skip_last": hx(hashSkip),
+			"tips_hash": hx(tipsHash), "txs_hash": hx(txsHash),
+		})
+
+	case "block_deserialize":
+		hexS, err := str(in, "bytes")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		b, err := unhex(hexS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var bl block.Block
+		derr := bl.Deserialize(b)
+		if derr != nil {
+			fail(id, derr)
+			return
+		}
+		var ser, hash, minerHash []byte
+		panicked := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					fail(id, fmt.Errorf("panic: %v", r))
+				}
+			}()
+			ser = bl.Serialize()
+			h := bl.GetHash()
+			hash = h[:]
+			mh := bl.Miner_TX.GetHash()
+			minerHash = mh[:]
+		}()
+		if panicked {
+			return
+		}
+		ok(id, map[string]interface{}{"bytes": hx(ser), "hash": hx(hash), "miner_tx_hash": hx(minerHash)})
+
+	// ---- Phase 8: valid-transaction accept path ---------------------------
+
+	case "tx_build_valid":
+		pkRaw, hasPk := in["publickeylist"]
+		if !hasPk {
+			fail(id, fmt.Errorf("missing publickeylist"))
+			return
+		}
+		var pkHex []string
+		if err := json.Unmarshal(pkRaw, &pkHex); err != nil {
+			fail(id, err)
+			return
+		}
+		ring := make([]*bn256.G1, len(pkHex))
+		for i, h := range pkHex {
+			p, err := decPoint(h)
+			if err != nil {
+				fail(id, err)
+				return
+			}
+			ring[i] = p
+		}
+		skHex, err := str(in, "secretkey")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		sk, err := b32(skHex)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		rHex, err := str(in, "r")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		rBig, err := b32(rHex)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		valS, err := str(in, "value")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var value uint64
+		fmt.Sscanf(valS, "%d", &value)
+		feesS, err := str(in, "fees")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var fees uint64
+		fmt.Sscanf(feesS, "%d", &fees)
+		burnS, err := str(in, "burn")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var burn uint64
+		fmt.Sscanf(burnS, "%d", &burn)
+		balRaw, hasBal := in["balances"]
+		if !hasBal {
+			fail(id, fmt.Errorf("missing balances"))
+			return
+		}
+		var balHex []string
+		if err := json.Unmarshal(balRaw, &balHex); err != nil {
+			fail(id, err)
+			return
+		}
+		balance := make([]*big.Int, len(balHex))
+		for i, h := range balHex {
+			balance[i], _ = new(big.Int).SetString(h, 16)
+		}
+		ebRaw, hasEb := in["eblind"]
+		if !hasEb {
+			fail(id, fmt.Errorf("missing eblind"))
+			return
+		}
+		var ebHex []string
+		if err := json.Unmarshal(ebRaw, &ebHex); err != nil {
+			fail(id, err)
+			return
+		}
+		eblind := make([]*big.Int, len(ebHex))
+		for i, h := range ebHex {
+			eblind[i], _ = new(big.Int).SetString(h, 16)
+		}
+		randHex, err := str(in, "rand")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		crypto.OracleSigmaSnapshot = &crypto.SigmaSnapshot{}
+		tx, err := buildValidTx(in, ring, sk, rBig, value, fees, burn, balance, eblind, randHex)
+		snap := crypto.OracleSigmaSnapshot
+		crypto.OracleSigmaSnapshot = nil
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var ser, hash []byte
+		panicked := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					fail(id, fmt.Errorf("panic: %v\n%s", r, string(debug.Stack())))
+				}
+			}()
+			ser = tx.Serialize()
+			h := tx.GetHash()
+			hash = h[:]
+		}()
+		if panicked {
+			return
+		}
+		var txid crypto.Hash
+		copy(txid[:], hash)
+		selfAccepted, _ := crypto.OracleVerifyProof(crypto.ZEROHASH, tx.Payloads[0].SCID, 0, &tx.Payloads[0].Statement, tx.Payloads[0].Proof, txid, burn)
+		clnHex := make([]string, len(tx.Payloads[0].Statement.CLn))
+		crnHex := make([]string, len(tx.Payloads[0].Statement.CRn))
+		cHex := make([]string, len(tx.Payloads[0].Statement.C))
+		for i := range clnHex {
+			clnHex[i] = hx(tx.Payloads[0].Statement.CLn[i].EncodeCompressed())
+			crnHex[i] = hx(tx.Payloads[0].Statement.CRn[i].EncodeCompressed())
+			cHex[i] = hx(tx.Payloads[0].Statement.C[i].EncodeCompressed())
+		}
+		ok(id, map[string]interface{}{
+			"bytes": hx(ser), "hash": hx(hash),
+			"proof": hx(crypto.OracleProofSerialize(tx.Payloads[0].Proof)),
+			"accepted": selfAccepted,
+			"c": cHex, "cln": clnHex, "crn": crnHex,
+			"d": hx(tx.Payloads[0].Statement.D.EncodeCompressed()),
+			"roothash": hx(tx.Payloads[0].Statement.Roothash[:]),
+			"fees": fmt.Sprintf("%d", tx.Payloads[0].Statement.Fees),
+			"snap_ay": snap.AY.String(), "snap_ad": snap.AD.String(),
+			"snap_ab": snap.AB.String(), "snap_ax": snap.AX.String(),
+			"snap_at": snap.AT.String(), "snap_au": snap.AU.String(),
+			"snap_cnr_right": snap.CnRRight.String(), "snap_dr": snap.DR.String(),
+			"snap_gr": snap.GR.String(), "snap_yxr": snap.YXR.String(),
+			"snap_cxr_right": snap.CXRRight.String(),
+		})
+
+	// ---- Phase 8: AstroBWT PoW -------------------------------------------
+
+	case "pow32":
+		bS, err := str(in, "bytes")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		b, err := unhex(bS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		h := astrobwt.POW32(b)
+		ok(id, map[string]interface{}{"hash": hx(h[:])})
+
+	case "pow_v3":
+		bS, err := str(in, "bytes")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		b, err := unhex(bS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		h := astrobwtv3.AstroBWTv3(b)
+		ok(id, map[string]interface{}{"hash": hx(h[:])})
+
+	case "pow_v3_debug":
+		bS, err := str(in, "bytes")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		b, err := unhex(bS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		dbg := &astrobwtv3.V3Debug{}
+		astrobwtv3.OracleV3Debug = dbg
+		h := astrobwtv3.AstroBWTv3(b)
+		astrobwtv3.OracleV3Debug = nil
+		posLogHex := ""
+		for _, v := range dbg.PosLog[:] {
+			posLogHex += fmt.Sprintf("%08x", v)
+		}
+		switchLogHex := ""
+		for _, v := range dbg.SwitchLog[:] {
+			switchLogHex += fmt.Sprintf("%016x", v)
+		}
+		ok(id, map[string]interface{}{
+			"hash":          hx(h[:]),
+			"sha_key":       hx(dbg.ShaKey[:]),
+			"after_salsa":   hx(dbg.AfterSalsa[:]),
+			"after_rc4":     hx(dbg.AfterRc4[:]),
+			"lhash":         fmt.Sprintf("%d", dbg.Lhash),
+			"prev_lhash":    fmt.Sprintf("%d", dbg.PrevLhash),
+			"iter1_switch":  fmt.Sprintf("%d", dbg.Iter1Switch),
+			"iter1_op":      fmt.Sprintf("%d", dbg.Iter1Op),
+			"iter1_pos1":    fmt.Sprintf("%d", dbg.Iter1Pos1),
+			"iter1_pos2":    fmt.Sprintf("%d", dbg.Iter1Pos2),
+			"iter1_state":   hx(dbg.Iter1State[:]),
+			"iter1_lhash":   fmt.Sprintf("%d", dbg.Iter1Lhash),
+			"iter1_prev":    fmt.Sprintf("%d", dbg.Iter1Prev),
+			"iter1_after_a": fmt.Sprintf("%d", dbg.Iter1AfterA),
+			"iter1_pa":      fmt.Sprintf("%d", dbg.Iter1PrevAfterA),
+			"iter1_after_b": fmt.Sprintf("%d", dbg.Iter1AfterB),
+			"iter1_pb":      fmt.Sprintf("%d", dbg.Iter1PrevAfterB),
+			"iter1_after_c": fmt.Sprintf("%d", dbg.Iter1AfterC),
+			"iter1_pc":      fmt.Sprintf("%d", dbg.Iter1PrevAfterC),
+			"tries":         fmt.Sprintf("%d", dbg.Tries),
+			"data_len":      fmt.Sprintf("%d", dbg.DataLen),
+			"final_state":   hx(dbg.FinalState[:]),
+			"data_prefix":   hx(dbg.DataPrefix[:]),
+			"data_prefix2":  hx(dbg.DataPrefix2[:]),
+			"data_prefix200": hx(dbg.DataPrefix200[:]),
+			"data_full":      hx([]byte(dbg.DataFull)),
+			"op_log":         fmt.Sprintf("%x", dbg.OpLog[:]),
+			"pos_log":        posLogHex,
+			"switch_log":     switchLogHex,
+		})
+
+	case "check_pow":
+		// CheckPowHashBig (blockchain/difficulty.go): valid iff
+		// LE-int(hash) <= 2^256/difficulty
+		hS, err := str(in, "hash")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		hB, err := unhex(hS)
+		if err != nil || len(hB) != 32 {
+			fail(id, fmt.Errorf("hash must be 32 bytes"))
+			return
+		}
+		dS, err := str(in, "difficulty")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		d, okd := new(big.Int).SetString(dS, 10)
+		if !okd {
+			fail(id, fmt.Errorf("bad difficulty"))
+			return
+		}
+		// HashToBig: reverse to big-endian then SetBytes
+		rev := make([]byte, 32)
+		for i := 0; i < 16; i++ {
+			rev[i], rev[31-i] = hB[31-i], hB[i]
+		}
+		powHashBig := new(big.Int).SetBytes(rev)
+		oneLsh256 := new(big.Int).Lsh(big.NewInt(1), 256)
+		target := new(big.Int).Div(oneLsh256, d)
+		valid := powHashBig.Cmp(target) <= 0
+		ok(id, map[string]interface{}{"valid": valid})
 
 	default:
 		fail(id, fmt.Errorf("unknown op %q", op))

@@ -4,9 +4,17 @@ Phase 0/1 spike: **differential testing harness + first crypto module**, proving
 that a Rust implementation can be verified byte-for-byte against the Go
 reference (`deroproject/derohe`) before we commit to the full port.
 
-**Status: PASS — 1,533 differential vectors (default run) + 24 unit tests,
+**Status: PASS — 1,874 differential vectors (default run) + 44 unit tests,
 byte-identical with the Go reference** (1 documented divergence, see below).
-Stress runs with 500 vectors/op exceed 4,500 vectors, all green.
+Stress runs with 500 vectors/op exceed 3,800 vectors, all green.
+**MAINNET REPLAY: PASS — 29/29 blocks reproduce the live chain's BLIDs
+byte-for-byte (genesis → height 7,511,601) and 29/29 miner-tx hashes match
+the chain**, verified against a public mainnet node via `harness/replay_mainnet.py`.
+
+**VALID-TX ACCEPT PATH: PASS — 4 fully valid transactions (real encrypted
+balances + real proofs, mirroring `walletapi/transaction_build.go`) are
+byte-identical Go↔Rust, self-accepted by both, and CROSS-accepted (each side
+verifies the other's proof => true).**
 
 ## Why this exists
 
@@ -33,6 +41,15 @@ crypto/            Rust crate (dero-crypto): clean-room implementation
   src/fft.rs           NTT FFT + convolution (fft_FieldVector et al)
   src/polynomial.rs    Polynomial.Mul quirk + RecursivePolynomials
   src/innerproduct.rs  inner-product argument (generate/verify/serialize)
+  src/bulletproof.rs   aggregate bulletproof (generate_proof/verify/serialize)
+  src/balance_serdes.rs NonceBalance on-chain balance serialization (uvarint + ElGamal)
+  src/statement.rs     Statement wire format (graviton/blake2s pointers, C/D/roothash)
+  src/rpc_args.rs      SCDATA: canonical CBOR args (fxamacker-compatible float16/time)
+  src/transaction.rs   Transaction serialization/hashing (all 6 tx types, proofs)
+  src/block.rs         Block + MiniBlock serialization/hashing (NIST SHA3-256)
+  src/astrobwt.rs      AstroBWT PoW (POW32: Salsa20 + SA-IS + SHA3-256)
+  src/astrobwt_v3.rs   AstroBWTv3 (current mainnet PoW: RC4 + 256-op obfuscation loop + SA-IS)
+  src/astrobwt_v3_ops.rs generated 256-case op switch (tools/gen_astrobwt_v3_ops.py)
   src/bin/oracle.rs    Rust oracle: same JSONL protocol as oracle/
 harness/difftest.py Python differential tester (deterministic vectors)
 derohe-reference/  Reference Go source (gitignored; fetched via tarball —
@@ -70,6 +87,15 @@ Toolchain notes (Windows):
 | FFT | fft_fieldvector, fft_generatorvector, convolution | forward + inverse, unity root pinned |
 | Polynomial | mul (binomial quirk), recursive_polynomials | b-coefficients are bits |
 | Inner product | ip_generate (n=2,8,128), ip_verify, cross-verify | byte-identical proofs; Go⇄Rust cross-verification accepts |
+| Bulletproof | proof_generate (N=2,4), proof_verify, cross-verify | byte-identical proofs; deterministic randomness injection; verdicts agree |
+| Balance serdes | noncebalance_marshal/unmarshal/unmarshal_nonce | byte-identical wire format; malformed input rejected identically (Go panics = Rust err) |
+| Transaction | tx_serialize (all 6 types), tx_deserialize | byte-identical serialization + txid (keccak of core statement); malformed inputs rejected identically |
+| Block | block_serialize (mini-blocks/tips/tx_hashes), block_deserialize | byte-identical blocks + BLID (NIST SHA3-256!) + skip-last variants; mini-block sanity + malformed rejected identically |
+| Mainnet replay | replay_mainnet.py: live-chain BLID/TXID verification | 29/29 blocks reproduce chain BLIDs byte-for-byte (genesis→7.5M); miner-tx hashes match the chain |
+| Valid-tx accept | tx_build_valid (real encrypted balances + u=upoint·sk) | byte-identical txs; self-accept + cross-accept both directions (the full bulletproof Verify equation, c_check included) |
+| AstroBWT PoW | pow32 (random sizes, 9973 boundary, live block blobs) | byte-identical POW32 hashes (Salsa20 → SA-IS → SHA3-256) |
+| AstroBWTv3 PoW | pow_v3 + check_pow (random sizes, live post-HF2 block blobs) | byte-identical v3 hashes (RC4 + 256-op loop + SA-IS); difficulty-target check |
+| Chain PoW replay | replay_pow.py: live blocks' miniblocks | 90/90 miniblocks valid at the chain's difficulty (9 final blocks), Go agrees on every hash |
 | Errors | malformed deserialize (short/long/non-QR) | both sides reject identically |
 
 ## Reference quirks discovered (and replicated)
@@ -106,6 +132,19 @@ Toolchain notes (Windows):
 12. **FFT unity root**: primitive 2^28-th root of unity mod n,
     `14a3074b...46edd`; omega = unity^((2^28)/length)
     (`fieldvector.go:166-169`).
+13. **Bulletproof randomness draw order** (GenerateProof): BA, sL(128), sR(128),
+    BS, aa(2m-2, skipping i=0,m), A, B, then phi/chi/psi INTERLEAVED
+    (phi[i],chi[i],psi[i] per i — not sequential loops), C_XG, T1, T2,
+    k_sk/k_r/k_b/k_tau. 264+6m draws total.
+14. **z_A = B_rand·w + A_rand** — uses the B-commit randomness, NOT the BS
+    commit randomness (`proof_generate.go:803-804`).
+15. **Verify needs the full statement structure.** The reference's Verify
+    reconstructs CLnR/CRnR/C_XR from the statement's C/D/CLn/CRn; synthetic
+    statements with zero encrypted balances pass parity + B^w·A + the inner
+    proof, but fail the sigma c-check (the sender-balance identity needs real
+    encrypted balances). The differential contract is agreement — both sides
+    produce identical verdicts on every input; the full accept path is
+    exercised at chain-replay against real mainnet txs.
 
 ## Documented divergences (intentional)
 
@@ -115,14 +154,10 @@ Toolchain notes (Windows):
   none for valid txs (points originate from valid proofs); to be re-checked at
   chain-replay phase against real mainnet txs.
 
-## What's next (Phase 4+)
+## What's next (Phase 11+)
 
-- `proof_generate.go` / `proof_verify.go` (the aggregate bulletproof:
-  range/balance proofs over the inner-product argument, with injected
-  randomness for deterministic differential testing)
-- `balance_serdes.go` (account balance serialization — the on-chain state)
-- tx/block serialization and hashing → then genesis-to-tip mainnet replay:
-  the definitive consensus test
+- full mainnet replay at scale (every block, or the full tx set via the user's
+  own synced node): verifies every txid in tx_hashes
 - DVM interpreter (the hardest piece; see project spec)
 
 ## License

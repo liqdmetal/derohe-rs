@@ -16,10 +16,10 @@ use ark_ec::PrimeGroup;
 use ark_ff::{Field, PrimeField};
 use ark_ff::fields::AdditiveGroup;
 
-use crate::curve::{encode_compressed, encode_uncompressed};
+use crate::curve::{decode_compressed, encode_compressed, encode_uncompressed};
 use crate::elgamal::ElGamal;
 use crate::fft;
-use crate::fieldvector::{fr_from_be_bytes, fr_to_be_bytes, FieldVector};
+use crate::fieldvector::{fr_from_be_bytes, fr_to_be_bytes, fr_to_hex, FieldVector};
 use crate::hash_to_point::base_g;
 use crate::innerproduct::{self, reduced_hash};
 use crate::keccak::keccak256;
@@ -66,6 +66,10 @@ pub struct Statement {
     pub d: G1Projective,
     pub roothash: [u8; 32],
     pub fees: u64,
+    /// hashed publickey pointers (graviton/blake2s leaves). When non-empty,
+    /// statement serialization emits these directly instead of recomputing
+    /// them (mirrors Go `Publickeylist_pointers`).
+    pub pointers: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -317,11 +321,18 @@ pub fn generate_proof(
         }
     }
 
-    // phi/chi/psi: m ElGamal commits to pubkey[index0], value 0
+    // phi/chi/psi: m ElGamal commits to pubkey[index0], value 0.
+    // Go builds them in ONE interleaved loop (phi[i], chi[i], psi[i] per
+    // iteration) — the draw order matters for m > 1.
     let pk0 = s.publickeylist[w.index[0]];
-    let phi: Vec<(ElGamal, Fr)> = (0..m).map(|_| elgamal_commit(&pk0, Fr::ZERO, rng.next())).collect();
-    let chi: Vec<(ElGamal, Fr)> = (0..m).map(|_| elgamal_commit(&pk0, Fr::ZERO, rng.next())).collect();
-    let psi: Vec<(ElGamal, Fr)> = (0..m).map(|_| elgamal_commit(&pk0, Fr::ZERO, rng.next())).collect();
+    let mut phi: Vec<(ElGamal, Fr)> = Vec::with_capacity(m);
+    let mut chi: Vec<(ElGamal, Fr)> = Vec::with_capacity(m);
+    let mut psi: Vec<(ElGamal, Fr)> = Vec::with_capacity(m);
+    for _ in 0..m {
+        phi.push(elgamal_commit(&pk0, Fr::ZERO, rng.next()));
+        chi.push(elgamal_commit(&pk0, Fr::ZERO, rng.next()));
+        psi.push(elgamal_commit(&pk0, Fr::ZERO, rng.next()));
+    }
 
     // ring ElGamal pairs
     let cn: Vec<ElGamal> = (0..n).map(|i| ElGamal::new(s.cln[i], s.crn[i])).collect();
@@ -522,27 +533,118 @@ pub fn generate_proof(
 // ---------------------------------------------------------------------------
 
 pub fn serialize(p: &Proof) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 * 33 + 8 * 33 * p.clng.len() + 33 + 32 * p.f.length() + 32 + 2 * 33 + 7 * 32 + 64 + 66 * p.ip.ls.len());
-    for pt in [&p.ba, &p.bs, &p.a, &p.b] {
-        out.extend_from_slice(&encode_compressed(pt));
-    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&encode_compressed(&p.ba));
+    out.extend_from_slice(&encode_compressed(&p.bs));
+    out.extend_from_slice(&encode_compressed(&p.a));
+    out.extend_from_slice(&encode_compressed(&p.b));
     for i in 0..p.clng.len() {
-        for pt in [&p.clng[i], &p.crng[i], &p.c_0g[i], &p.dg[i], &p.y_0g[i], &p.gg[i], &p.c_xg[i], &p.y_xg[i]] {
-            out.extend_from_slice(&encode_compressed(pt));
-        }
+        out.extend_from_slice(&encode_compressed(&p.clng[i]));
+        out.extend_from_slice(&encode_compressed(&p.crng[i]));
+        out.extend_from_slice(&encode_compressed(&p.c_0g[i]));
+        out.extend_from_slice(&encode_compressed(&p.dg[i]));
+        out.extend_from_slice(&encode_compressed(&p.y_0g[i]));
+        out.extend_from_slice(&encode_compressed(&p.gg[i]));
+        out.extend_from_slice(&encode_compressed(&p.c_xg[i]));
+        out.extend_from_slice(&encode_compressed(&p.y_xg[i]));
     }
     out.extend_from_slice(&encode_compressed(&p.u));
-    for el in &p.f.0 {
-        out.extend_from_slice(el);
+    for i in 0..p.f.length() {
+        out.extend_from_slice(&fr_to_be_bytes(p.f.element_fr(i)));
     }
     out.extend_from_slice(&fr_to_be_bytes(p.z_a));
     out.extend_from_slice(&encode_compressed(&p.t_1));
     out.extend_from_slice(&encode_compressed(&p.t_2));
-    for s in [p.that, p.mu, p.c, p.s_sk, p.s_r, p.s_b, p.s_tau] {
-        out.extend_from_slice(&fr_to_be_bytes(s));
+    out.extend_from_slice(&fr_to_be_bytes(p.that));
+    out.extend_from_slice(&fr_to_be_bytes(p.mu));
+    out.extend_from_slice(&fr_to_be_bytes(p.c));
+    out.extend_from_slice(&fr_to_be_bytes(p.s_sk));
+    out.extend_from_slice(&fr_to_be_bytes(p.s_r));
+    out.extend_from_slice(&fr_to_be_bytes(p.s_b));
+    out.extend_from_slice(&fr_to_be_bytes(p.s_tau));
+    out.extend_from_slice(&p.ip.a);
+    out.extend_from_slice(&p.ip.b);
+    for i in 0..7 {
+        out.extend_from_slice(&encode_compressed(&p.ip.ls[i]));
+        out.extend_from_slice(&encode_compressed(&p.ip.rs[i]));
     }
-    out.extend_from_slice(&innerproduct::serialize(&p.ip));
     out
+}
+
+/// Serialized length in bytes (mirrors Go `Proof.Serialize` output size).
+pub fn serialized_len(p: &Proof) -> usize {
+    serialize(p).len()
+}
+
+/// Deserialize a Go-serialized Proof. m = number of ring-pair groups
+/// (CLnG entries) = ring_size / 2.
+pub fn deserialize(b: &[u8], m: usize) -> Result<Proof, String> {
+    let mut pos = 0usize;
+    let mut take = |n: usize| -> Result<&[u8], String> {
+        if pos + n > b.len() {
+            return Err("proof buffer too short".into());
+        }
+        let s = &b[pos..pos + n];
+        pos += n;
+        Ok(s)
+    };
+    let pt = |bytes: &[u8]| -> Result<G1Projective, String> { decode_compressed(bytes) };
+    let sc = |bytes: &[u8]| -> Result<[u8; 32], String> {
+        let mut a = [0u8; 32];
+        a.copy_from_slice(bytes);
+        Ok(a)
+    };
+    let ba = pt(take(33)?)?;
+    let bs = pt(take(33)?)?;
+    let a = pt(take(33)?)?;
+    let b = pt(take(33)?)?;
+    let mut clng = Vec::with_capacity(m);
+    let mut crng = Vec::with_capacity(m);
+    let mut c_0g = Vec::with_capacity(m);
+    let mut dg = Vec::with_capacity(m);
+    let mut y_0g = Vec::with_capacity(m);
+    let mut gg = Vec::with_capacity(m);
+    let mut c_xg = Vec::with_capacity(m);
+    let mut y_xg = Vec::with_capacity(m);
+    for _ in 0..m {
+        clng.push(pt(take(33)?)?);
+        crng.push(pt(take(33)?)?);
+        c_0g.push(pt(take(33)?)?);
+        dg.push(pt(take(33)?)?);
+        y_0g.push(pt(take(33)?)?);
+        gg.push(pt(take(33)?)?);
+        c_xg.push(pt(take(33)?)?);
+        y_xg.push(pt(take(33)?)?);
+    }
+    let u = pt(take(33)?)?;
+    let mut f_raw = Vec::with_capacity(2 * m);
+    for _ in 0..2 * m {
+        f_raw.push(sc(take(32)?)?);
+    }
+    let f = FieldVector::new(f_raw);
+    let z_a = fr_from_be_bytes(take(32)?);
+    let t_1 = pt(take(33)?)?;
+    let t_2 = pt(take(33)?)?;
+    let that = fr_from_be_bytes(take(32)?);
+    let mu = fr_from_be_bytes(take(32)?);
+    let c = fr_from_be_bytes(take(32)?);
+    let s_sk = fr_from_be_bytes(take(32)?);
+    let s_r = fr_from_be_bytes(take(32)?);
+    let s_b = fr_from_be_bytes(take(32)?);
+    let s_tau = fr_from_be_bytes(take(32)?);
+    let ip_a = sc(take(32)?)?;
+    let ip_b = sc(take(32)?)?;
+    let mut ls = Vec::with_capacity(7);
+    let mut rs = Vec::with_capacity(7);
+    for _ in 0..7 {
+        ls.push(pt(take(33)?)?);
+        rs.push(pt(take(33)?)?);
+    }
+    Ok(Proof {
+        ba, bs, a, b, clng, crng, c_0g, dg, y_0g, gg, c_xg, y_xg, u,
+        f, z_a, t_1, t_2, that, mu, c, s_sk, s_r, s_b, s_tau,
+        ip: innerproduct::InnerProduct { a: ip_a, b: ip_b, ls, rs },
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,10 @@
 //! implementation intended for permissive licensing). Correctness is enforced
 //! by differential testing against the Go reference via `harness/difftest.py`.
 
+pub mod astrobwt;
+pub mod astrobwt_v3;
+pub mod balance_serdes;
+pub mod block;
 pub mod bulletproof;
 pub mod curve;
 pub mod elgamal;
@@ -16,3 +20,6 @@ pub mod keccak;
 pub mod pedersen;
 pub mod pointvector;
 pub mod polynomial;
+pub mod rpc_args;
+pub mod statement;
+pub mod transaction;

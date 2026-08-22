@@ -8,3 +8,6 @@ oracle/oracle
 # Python cache
 __pycache__/
 *.pyc
+# harness debug request dumps (regenerated deterministically)
+harness/phase_*_requests.json
+harness/phase_*_extra.json
