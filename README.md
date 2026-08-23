@@ -4,9 +4,9 @@ Phase 0/1 spike: **differential testing harness + first crypto module**, proving
 that a Rust implementation can be verified byte-for-byte against the Go
 reference (`deroproject/derohe`) before we commit to the full port.
 
-**Status: PASS — 2,344 differential vectors (default run) + 57 unit tests,
+**Status: PASS — 2,368 differential vectors (default run) + 57 unit tests,
 byte-identical with the Go reference** (1 documented divergence, see below).
-Stress runs with 500 vectors/op exceed 4,300 vectors, all green.
+Stress runs with 500 vectors/op reach 4,369 vectors, all green.
 **MAINNET REPLAY: PASS — 29/29 blocks reproduce the live chain's BLIDs
 byte-for-byte (genesis → height 7,511,601) and 29/29 miner-tx hashes match
 the chain**, verified against a public mainnet node via `harness/replay_mainnet.py`.
