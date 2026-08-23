@@ -1056,13 +1056,65 @@ End Function""",
     go_m = run_oracle(GO_ORACLE, phase_m)
     rust_m = run_oracle(RUST_ORACLE, phase_m)
 
+    # ---- Phase N: graviton state trees (differential) ----------------------
+    # Both oracles hold persistent trees keyed by name; the same op stream
+    # (put/delete on keys, with gets) must produce identical root hashes.
+    phase_n = []
+    iid = 6000000
+
+    def add_n(op, inp):
+        nonlocal iid
+        phase_n.append({"id": iid, "op": op, "in": inp})
+        iid += 1
+
+    rng2 = random.Random(0x6A72A7D0)
+    # deterministic key/value stream across 3 trees
+    keys = [("k%02d" % i).encode().hex() for i in range(40)]
+    for name in ("balances", "scdata", "scmeta"):
+        # put a bunch
+        for i in range(25):
+            k = keys[i]
+            v = rng2.randbytes(8).hex()
+            add_n("grav_put", {"tree": name, "key": k, "value": v})
+        # gets in between
+        for i in range(5):
+            add_n("grav_get", {"tree": name, "key": keys[rng2.randrange(0, 25)]})
+        # overwrite some
+        for i in range(6):
+            k = keys[rng2.randrange(0, 25)]
+            v = rng2.randbytes(8).hex()
+            add_n("grav_put", {"tree": name, "key": k, "value": v})
+        # delete some
+        for i in range(5):
+            k = keys[rng2.randrange(0, 25)]
+            add_n("grav_delete", {"tree": name, "key": k})
+        # more puts (collapse/rebuild paths)
+        for i in range(10):
+            k = keys[rng2.randrange(0, 25)]
+            v = rng2.randbytes(16).hex()
+            add_n("grav_put", {"tree": name, "key": k, "value": v})
+        # hash the tree at the end
+        # (grav_* ops return the hash after each mutation, so the final op's
+        # hash is the tree root)
+
+    # a stress tree with many keys (deeper trie)
+    for i in range(200):
+        k = "s%04x" % i
+        v = rng2.randbytes(4).hex()
+        add_n("grav_put", {"tree": "deep", "key": k, "value": v})
+    for i in range(40):
+        add_n("grav_delete", {"tree": "deep", "key": "s%04x" % (i * 3)})
+
+    go_n = run_oracle(GO_ORACLE, phase_n)
+    rust_n = run_oracle(RUST_ORACLE, phase_n)
+
     # ---- compare -----------------------------------------------------------
     failures = []
     per_op = {}
 
     def check(resp_go, resp_rust):
         op = None
-        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m):
+        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n):
             if r["id"] == resp_go["id"]:
                 op = r["op"]
                 break
@@ -1076,7 +1128,7 @@ End Function""",
             failures.append((op, resp_go["id"], f"expected x>=p divergence, got go={g_ok} rust={r_ok}"))
             return
         if g_ok != r_ok:
-            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m) if r["id"] == resp_go["id"]), None)
+            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n) if r["id"] == resp_go["id"]), None)
             failures.append(
                 (op, resp_go["id"], f"ok mismatch: go={g_ok} rust={r_ok} "
                  f"go_err={resp_go.get('err')} rust_err={resp_rust.get('err')} req={json.dumps(req)}")
@@ -1088,7 +1140,7 @@ End Function""",
             go_out = {k: v for k, v in resp_go["out"].items() if not k.startswith("snap_")}
             rust_out = {k: v for k, v in resp_rust["out"].items() if not k.startswith("snap_")}
             if go_out != rust_out:
-                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m) if r["id"] == resp_go["id"]), None)
+                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n) if r["id"] == resp_go["id"]), None)
                 failures.append(
                     (op, resp_go["id"], f"out mismatch:\n  go:   {json.dumps(go_out)}\n  rust: {json.dumps(rust_out)}\n  req:  {json.dumps(req)}")
                 )
@@ -1120,6 +1172,8 @@ End Function""",
         check(go_l[r["id"]], rust_l[r["id"]])
     for r in phase_m:
         check(go_m[r["id"]], rust_m[r["id"]])
+    for r in phase_n:
+        check(go_n[r["id"]], rust_n[r["id"]])
 
     # valid-tx cross-accept: each side must ACCEPT the other's proof
     for cid, label, kind in cross_i_expect:
@@ -1163,7 +1217,7 @@ End Function""",
         else:
             failures.append(("proof_cross_verify", cid, f"missing cross-verify response go={g} rust={r}"))
 
-    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m)
+    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n)
     print(f"\n=== differential results: {total} vectors ===")
     for op, cnt in sorted(per_op.items()):
         print(f"  {op:32s} {cnt:4d}")

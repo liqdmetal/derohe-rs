@@ -1166,6 +1166,73 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     Err(e) => Err(e.to_string()),
                 }
             }
+            "tx_extract_verify" => {
+                let blob = hex_decode(&s("blob")?)?;
+                let bl = dero_crypto::block::Block::deserialize(&blob)?;
+                let tx = bl.miner_tx;
+                let txid = tx.get_hash(3);
+                let mut out = serde_json::Map::new();
+                out.insert("txid".into(), json!(hex::encode(txid)));
+                for p in &tx.payloads {
+                    let st = &p.statement;
+                    let pk: Vec<String> = st.publickeylist.iter().map(|k| hex::encode(encode_compressed(k))).collect();
+                    let cln: Vec<String> = st.cln.iter().map(|k| hex::encode(encode_compressed(k))).collect();
+                    let crn: Vec<String> = st.crn.iter().map(|k| hex::encode(encode_compressed(k))).collect();
+                    let c: Vec<String> = st.c.iter().map(|k| hex::encode(encode_compressed(k))).collect();
+                    // run the full verify on the real statement (whatever it
+                    // carries after deserialize — same as the Go side)
+                    let proof = p.proof.clone().expect("miner tx proof present");
+                    let verified = bulletproof::verify(&p.scid, 0, st, &proof, &txid, p.burn_value);
+                    let proof_ser = bulletproof::serialize(&proof);
+                    out.insert("payload".into(), json!({
+                        "scid": hex::encode(p.scid),
+                        "scid_index": 0,
+                        "burn": p.burn_value.to_string(),
+                        "publickeys": pk,
+                        "cln": cln,
+                        "crn": crn,
+                        "c": c,
+                        "d": hex::encode(encode_compressed(&st.d)),
+                        "roothash": hex::encode(st.roothash),
+                        "fees": st.fees.to_string(),
+                        "proof": hex::encode(proof_ser),
+                        "verified": verified,
+                    }));
+                }
+                Ok(serde_json::Value::Object(out))
+            }
+            "grav_put" | "grav_delete" | "grav_get" => {
+                use dero_crypto::graviton::Tree;
+                let tname = s("tree")?;
+                // persistent trees across requests (process-level)
+                static mut GRAV: Option<std::collections::HashMap<String, Tree>> = None;
+                let trees = unsafe {
+                    GRAV.get_or_insert_with(|| std::collections::HashMap::new())
+                };
+                if !trees.contains_key(&tname) {
+                    trees.insert(tname.clone(), Tree::new(&tname));
+                }
+                let key = hex_decode(&s("key")?)?;
+                match op {
+                    "grav_put" => {
+                        let val = hex_decode(&s("value")?)?;
+                        trees.get_mut(&tname).unwrap().put(&key, &val);
+                        let h = trees.get(&tname).unwrap().hash();
+                        Ok(json!({"hash": hex::encode(h)}))
+                    }
+                    "grav_delete" => {
+                        trees.get_mut(&tname).unwrap().delete(&key);
+                        let h = trees.get(&tname).unwrap().hash();
+                        Ok(json!({"hash": hex::encode(h)}))
+                    }
+                    _ => {
+                        match trees.get(&tname).unwrap().get(&key) {
+                            Some(v) => Ok(json!({"found": true, "value": hex::encode(v)})),
+                            None => Ok(json!({"found": false})),
+                        }
+                    }
+                }
+            }
             "bp_debug" => {
                 let st = statement_from_in(inp)?;
                 let rand = hex_decode(&s("rand")?)?;

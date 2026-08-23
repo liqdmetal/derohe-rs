@@ -15,6 +15,7 @@ pub mod dvm;
 pub mod elgamal;
 pub mod fft;
 pub mod fieldvector;
+pub mod graviton;
 pub mod hash_to_point;
 pub mod innerproduct;
 pub mod keccak;

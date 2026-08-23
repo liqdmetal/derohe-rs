@@ -35,6 +35,7 @@ import (
 	"github.com/deroproject/derohe/dvm"
 	"github.com/deroproject/derohe/rpc"
 	"github.com/deroproject/derohe/transaction"
+	"github.com/deroproject/graviton"
 )
 
 type Request struct {
@@ -901,6 +902,12 @@ func optionalStr(in map[string]json.RawMessage, k, dflt string) string {
 		}
 	}
 	return dflt
+}
+
+func must(in map[string]json.RawMessage, k string) string {
+	var s string
+	json.Unmarshal(in[k], &s)
+	return s
 }
 
 func handle(id int, op string, raw json.RawMessage) {
@@ -2681,9 +2688,157 @@ func handle(id int, op string, raw json.RawMessage) {
 			fail(id, err)
 		}
 
+	// ---- Phase 11: real chain tx proof verification ----------------------
+
+	case "tx_extract_verify":
+		blobS, err := str(in, "blob")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		blob, err := unhex(blobS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var bl block.Block
+		if err := bl.Deserialize(blob); err != nil {
+			fail(id, err)
+			return
+		}
+		tx := bl.Miner_TX
+		txid := tx.GetHash()
+		out := map[string]interface{}{
+			"txid": hx(txid[:]),
+		}
+		scid_map := map[crypto.Hash]int{}
+		for t := range tx.Payloads {
+			p := &tx.Payloads[t]
+			s := &p.Statement
+			pk := []string{}
+			for _, k := range s.Publickeylist_compressed {
+				pk = append(pk, hx(k[:]))
+			}
+			cln := []string{}
+			for _, pt := range s.CLn {
+				cln = append(cln, hx(pt.EncodeCompressed()))
+			}
+			crn := []string{}
+			for _, pt := range s.CRn {
+				crn = append(crn, hx(pt.EncodeCompressed()))
+			}
+			c := []string{}
+			for _, pt := range s.C {
+				c = append(c, hx(pt.EncodeCompressed()))
+			}
+			index := scid_map[p.SCID]
+			verified := p.Proof.Verify(p.SCID, index, s, txid, p.BurnValue)
+			out["payload"] = map[string]interface{}{
+				"scid":        hx(p.SCID[:]),
+				"scid_index":  index,
+				"burn":        fmt.Sprintf("%d", p.BurnValue),
+				"publickeys":  pk,
+				"cln":         cln,
+				"crn":         crn,
+				"c":           c,
+				"d":           hx(s.D.EncodeCompressed()),
+				"roothash":    hx(s.Roothash[:]),
+				"fees":        fmt.Sprintf("%d", s.Fees),
+				"proof":       hx(crypto.OracleProofSerialize(p.Proof)),
+				"verified":    verified,
+			}
+			scid_map[p.SCID] = index + 1
+		}
+		ok(id, out)
+
+	// ---- Phase 12: graviton tree (state DB) -------------------------------
+
+	case "grav_put":
+		tree, err := gravTree(must(in, "tree"))
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		key, err := unhex(must(in, "key"))
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		val, err := unhex(must(in, "value"))
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		tree.Put(key, val)
+		h, err := tree.Hash()
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		ok(id, map[string]interface{}{"hash": hex.EncodeToString(h[:])})
+
+	case "grav_delete":
+		tree, err := gravTree(must(in, "tree"))
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		key, err := unhex(must(in, "key"))
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		tree.Delete(key)
+		h, err := tree.Hash()
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		ok(id, map[string]interface{}{"hash": hex.EncodeToString(h[:])})
+
+	case "grav_get":
+		tree, err := gravTree(must(in, "tree"))
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		key, err := unhex(must(in, "key"))
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		v, err := tree.Get(key)
+		if err != nil {
+			ok(id, map[string]interface{}{"found": false})
+			return
+		}
+		ok(id, map[string]interface{}{"found": true, "value": hex.EncodeToString(v)})
+
 	default:
 		fail(id, fmt.Errorf("unknown op %q", op))
 	}
+}
+
+var gravtrees = map[string]*graviton.Tree{}
+
+func gravTree(name string) (*graviton.Tree, error) {
+	if t, ok := gravtrees[name]; ok {
+		return t, nil
+	}
+	store, err := graviton.NewMemStore()
+	if err != nil {
+		return nil, err
+	}
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return nil, err
+	}
+	t, err := ss.GetTree(name)
+	if err != nil {
+		return nil, err
+	}
+	gravtrees[name] = t
+	return t, nil
 }
 
 func main() {
