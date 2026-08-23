@@ -2241,7 +2241,18 @@ func handle(id int, op string, raw json.RawMessage) {
 		if panicked {
 			return
 		}
-		ok(id, map[string]interface{}{"bytes": hx(ser), "hash": hx(hash), "miner_tx_hash": hx(minerHash)})
+		// mirror the Rust oracle's miner_statements (roothash/fees/ring per
+		// miner-tx payload) so the differential compares like-for-like
+		minerStmts := []map[string]interface{}{}
+		for _, p := range bl.Miner_TX.Payloads {
+			st := &p.Statement
+			minerStmts = append(minerStmts, map[string]interface{}{
+				"roothash": hx(st.Roothash[:]),
+				"fees":     fmt.Sprintf("%d", st.Fees),
+				"ring":     len(st.Publickeylist_pointers) / int(st.Bytes_per_publickey),
+			})
+		}
+		ok(id, map[string]interface{}{"bytes": hx(ser), "hash": hx(hash), "miner_tx_hash": hx(minerHash), "miner_statements": minerStmts})
 
 	// ---- Phase 8: valid-transaction accept path ---------------------------
 
