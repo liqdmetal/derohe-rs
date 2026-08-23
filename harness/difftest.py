@@ -1349,13 +1349,46 @@ End Function""",
     go_r = run_oracle(GO_ORACLE, phase_r)
     rust_r = run_oracle(RUST_ORACLE, phase_r)
 
+    # ---- Phase S: K0 Fix B1 floor rule differential (k0_floor) --------------
+    # Mirrors blockchain.K0RingSizeFloorReject: from the fork height onward,
+    # NORMAL(3)/BURN(4) txs with ringsize < 4 are rejected; everything else
+    # is exempt. The fork height is passed explicitly so the boundary sweep
+    # is exact. A divergence here means the two implementations disagree on
+    # which txs are valid post-fork -> chain split.
+    phase_s = []
+    iid = 9700000
+
+    def add_s(height, txtype, ringsize, floor):
+        nonlocal iid
+        phase_s.append({"id": iid, "op": "k0_floor",
+                        "in": {"height": str(height), "txtype": str(txtype),
+                               "ringsize": str(ringsize), "floor": str(floor)}})
+        iid += 1
+
+    FLOOR = 7_600_000
+    TYPES = [0, 1, 2, 3, 4, 5]  # PREMINE, REGISTRATION, COINBASE, NORMAL, BURN, SC
+    for h in [FLOOR - 1, FLOOR, FLOOR + 1, FLOOR + 100]:
+        for t in TYPES:
+            for r in [1, 2, 3, 4, 5, 8]:
+                add_s(h, t, r, FLOOR)
+    # edges: exactly at fork, ring exactly 4, all types at ring 2
+    for t in TYPES:
+        add_s(FLOOR, t, 2, FLOOR)
+        add_s(FLOOR, t, 4, FLOOR)
+    add_s(0, 3, 2, 0)          # testnet: floor at genesis
+    add_s(0, 4, 2, 0)          # testnet burn at genesis
+    add_s(0, 5, 2, 0)          # testnet SC exempt
+
+    go_s = run_oracle(GO_ORACLE, phase_s)
+    rust_s = run_oracle(RUST_ORACLE, phase_s)
+
     # ---- compare -----------------------------------------------------------
     failures = []
     per_op = {}
 
     def check(resp_go, resp_rust):
         op = None
-        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r):
+        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r + phase_s):
             if r["id"] == resp_go["id"]:
                 op = r["op"]
                 break
@@ -1369,7 +1402,7 @@ End Function""",
             failures.append((op, resp_go["id"], f"expected x>=p divergence, got go={g_ok} rust={r_ok}"))
             return
         if g_ok != r_ok:
-            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r) if r["id"] == resp_go["id"]), None)
+            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r + phase_s) if r["id"] == resp_go["id"]), None)
             failures.append(
                 (op, resp_go["id"], f"ok mismatch: go={g_ok} rust={r_ok} "
                  f"go_err={resp_go.get('err')} rust_err={resp_rust.get('err')} req={json.dumps(req)}")
@@ -1381,7 +1414,7 @@ End Function""",
             go_out = {k: v for k, v in resp_go["out"].items() if not k.startswith("snap_")}
             rust_out = {k: v for k, v in resp_rust["out"].items() if not k.startswith("snap_")}
             if go_out != rust_out:
-                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r) if r["id"] == resp_go["id"]), None)
+                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r + phase_s) if r["id"] == resp_go["id"]), None)
                 failures.append(
                     (op, resp_go["id"], f"out mismatch:\n  go:   {json.dumps(go_out)}\n  rust: {json.dumps(rust_out)}\n  req:  {json.dumps(req)}")
                 )
@@ -1423,6 +1456,8 @@ End Function""",
         check(go_q[r["id"]], rust_q[r["id"]])
     for r in phase_r:
         check(go_r[r["id"]], rust_r[r["id"]])
+    for r in phase_s:
+        check(go_s[r["id"]], rust_s[r["id"]])
 
     # real-chain tx verify: verdicts must AGREE (accept-path agreement)
     for cid, label in ((r["id"], r["id"]) for r in phase_o):
@@ -1477,7 +1512,7 @@ End Function""",
         else:
             failures.append(("proof_cross_verify", cid, f"missing cross-verify response go={g} rust={r}"))
 
-    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n) + len(phase_o) + len(phase_p) + len(phase_q) + len(phase_r)
+    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n) + len(phase_o) + len(phase_p) + len(phase_q) + len(phase_r) + len(phase_s)
     print(f"\n=== differential results: {total} vectors ===")
     for op, cnt in sorted(per_op.items()):
         print(f"  {op:32s} {cnt:4d}")

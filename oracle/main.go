@@ -31,9 +31,11 @@ import (
 	"github.com/deroproject/derohe/astrobwt/astrobwtv3"
 	"github.com/deroproject/derohe/block"
 	"github.com/deroproject/derohe/blockchain"
+	"github.com/deroproject/derohe/config"
 	"github.com/deroproject/derohe/cryptography/bn256"
 	"github.com/deroproject/derohe/cryptography/crypto"
 	"github.com/deroproject/derohe/dvm"
+	"github.com/deroproject/derohe/globals"
 	"github.com/deroproject/derohe/rpc"
 	"github.com/deroproject/derohe/transaction"
 	"github.com/deroproject/graviton"
@@ -2879,6 +2881,42 @@ func handle(id int, op string, raw json.RawMessage) {
 		}
 		ok(id, map[string]interface{}{"reward": fmt.Sprintf("%d", blockchain.OracleCalcBlockReward(height))})
 
+	case "k0_floor":
+		// K0 Fix B1 decision rule (Go reference): reject NORMAL/BURN txs
+		// with ringsize < 4 from the fork height onward. Calls the REAL
+		// exported function; the fork height is overridable per-request so
+		// the differential vectors can sweep the boundary (config default:
+		// mainnet 7.6M / testnet 0).
+		height, err := strconv.ParseUint(must(in, "height"), 10, 64)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		ts, err := strconv.ParseUint(must(in, "txtype"), 10, 64)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		rs, err := strconv.ParseUint(must(in, "ringsize"), 10, 64)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		if f := optionalStr(in, "floor", ""); f != "" {
+			floor, ferr := strconv.ParseInt(f, 10, 64)
+			if ferr != nil {
+				fail(id, ferr)
+				return
+			}
+			orig := globals.Config.K0_MIN_RING4_HEIGHT
+			globals.Config.K0_MIN_RING4_HEIGHT = floor
+			rej := blockchain.K0RingSizeFloorReject(height, transaction.TransactionType(ts), rs)
+			globals.Config.K0_MIN_RING4_HEIGHT = orig
+			ok(id, map[string]interface{}{"reject": rej})
+			return
+		}
+		ok(id, map[string]interface{}{"reject": blockchain.K0RingSizeFloorReject(height, transaction.TransactionType(ts), rs)})
+
 	case "chain_miner_tx":
 		// process_miner_transaction on a JSON-specified block, using the
 		// persistent graviton tree "B" (pre-populated by grav_put so the
@@ -3065,6 +3103,99 @@ func handle(id int, op string, raw json.RawMessage) {
 		}
 		h, _ := bt.Hash()
 		ok(id, map[string]interface{}{"hash": hex.EncodeToString(h[:])})
+
+	// ---- Phase 15: SC install/call (process_transaction_sc) ---------------
+
+	case "chain_sc_debug":
+		// deserialize + report SCDATA contents (debug the install path)
+		blobS, err := str(in, "blob")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		blob, err := unhex(blobS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var tx transaction.Transaction
+		if err := tx.Deserialize(blob); err != nil {
+			fail(id, err)
+			return
+		}
+		args := []string{}
+		for _, a := range tx.SCDATA {
+			args = append(args, fmt.Sprintf("%s=%v(%v)", a.Name, a.Value, a.DataType))
+		}
+		has := tx.SCDATA.Has(rpc.SCACTION, rpc.DataUint64)
+		ok(id, map[string]interface{}{"scdata_len": len(tx.SCDATA), "args": args, "has_action": has})
+
+	case "chain_sc_install":
+		// install a smart contract: SCDATA with SCACTION=SC_INSTALL + SCCODE
+		// The tx carries the code; process_transaction_sc parses + installs
+		// (writes SC_Code_Key + meta into the SC data/meta trees), runs
+		// Initialize/InitializePrivate. Returns the SC data tree root + gas.
+		blobS, err := str(in, "blob")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		blob, err := unhex(blobS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var tx transaction.Transaction
+		if err := tx.Deserialize(blob); err != nil {
+			fail(id, err)
+			return
+		}
+		height, _ := strconv.ParseUint(optionalStr(in, "height", "0"), 10, 64)
+		store, _ := graviton.NewMemStore()
+		ss, _ := store.LoadSnapshot(0)
+		cache := map[crypto.Hash]*graviton.Tree{}
+		bt, _ := ss.GetTree(config.BALANCE_TREE)
+		mt, _ := ss.GetTree(config.SC_META)
+		txid := tx.GetHash()
+		scid := txid
+		signer := [33]byte{}
+		if s, err := unhex(optionalStr(in, "signer", "")); err == nil && len(s) == 33 {
+			copy(signer[:], s)
+		} else if len(tx.Payloads) > 0 && len(tx.Payloads[0].Statement.Publickeylist_compressed) > 0 {
+			signer = tx.Payloads[0].Statement.Publickeylist_compressed[0]
+		} else {
+			// no signer provided and not expanded: derive from the first
+			// statement's first pointer is impossible (keyhash only); fall
+			// back to zeros (process_transaction_sc allows anonymous SCs)
+		}
+		if _, err := bt.Get(signer[:]); err != nil {
+			var acckey crypto.Point
+			if err := acckey.DecodeCompressed(signer[:]); err == nil {
+				zb := crypto.ConstructElGamal(acckey.G1(), crypto.ElGamal_BASE_G)
+				nb := crypto.NonceBalance{NonceHeight: 0, Balance: zb}
+				bt.Put(signer[:], nb.Serialize())
+			}
+		}
+		gas, err := blockchain.OracleProcessTxSC(cache, ss, height, height, 0, txid, tx, bt, mt)
+		if err != nil {
+			ok(id, map[string]interface{}{"err": err.Error(), "gas": fmt.Sprintf("%d", gas)})
+			return
+		}
+		// debug: dump whether the SC meta tree has the SCID entry
+		meta_found := false
+		if meta_bytes, merr := mt.Get(scid[:]); merr == nil {
+			meta_found = true
+			_ = meta_bytes
+		}
+		h := []byte{}
+		if t, ok := cache[scid]; ok && t != nil {
+			hh, _ := t.Hash()
+			h = hh[:]
+		}
+		hh, _ := bt.Hash()
+		ok(id, map[string]interface{}{"scid": hex.EncodeToString(scid[:]), "gas": fmt.Sprintf("%d", gas),
+			"data_root": hex.EncodeToString(h), "balance_root": hex.EncodeToString(hh[:]),
+			"meta_found": meta_found})
 
 	default:
 		fail(id, fmt.Errorf("unknown op %q", op))

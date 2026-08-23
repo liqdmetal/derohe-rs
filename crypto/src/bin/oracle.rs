@@ -1279,6 +1279,23 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let height: u64 = s("height")?.parse().map_err(|_| "bad height".to_string())?;
                 Ok(json!({"reward": chain::calc_block_reward(height).to_string()}))
             }
+            "k0_floor" => {
+                // K0 Fix B1 floor rule (mirror of Go
+                // blockchain.K0RingSizeFloorReject): from the fork height
+                // onward, NORMAL(3)/BURN(4) txs with ringsize < 4 are
+                // rejected. All other tx types are exempt. The fork height
+                // is passed explicitly so the differential vectors can
+                // sweep the boundary.
+                use dero_crypto::transaction::*;
+                let height: u64 = s("height")?.parse().map_err(|_| "bad height".to_string())?;
+                let txtype: u64 = s("txtype")?.parse().map_err(|_| "bad txtype".to_string())?;
+                let ringsize: u64 = s("ringsize")?.parse().map_err(|_| "bad ringsize".to_string())?;
+                let floor: u64 = s("floor")?.parse().map_err(|_| "bad floor".to_string())?;
+                let reject = height >= floor
+                    && ringsize < 4
+                    && (txtype == TX_NORMAL || txtype == TX_BURN);
+                Ok(json!({"reject": reject}))
+            }
             "chain_miner_tx" => {
                 use dero_crypto::chain;
                 use dero_crypto::graviton::Tree;
