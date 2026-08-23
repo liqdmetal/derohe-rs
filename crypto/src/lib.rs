@@ -27,6 +27,7 @@ pub mod rpc_args;
 pub mod statement;
 pub mod transaction;
 pub mod rpc_addr;
+pub mod sc;
 
 /// SHA-256 (used by the DVM sha256 builtin).
 pub fn sha2_256(data: &[u8]) -> [u8; 32] {

@@ -48,7 +48,7 @@ fn construct_elgamal(c: &G1Projective, d: &G1Projective) -> ElGamal {
 }
 
 /// 32-byte big-endian encoding of a u64 (for ElGamal::plus).
-fn be32(v: u64) -> [u8; 32] {
+pub fn be32(v: u64) -> [u8; 32] {
     let mut b = [0u8; 32];
     b[24..].copy_from_slice(&v.to_be_bytes());
     b
@@ -163,8 +163,7 @@ pub fn process_transaction(
 
 /// Apply one payload's ring changes (Go process_transaction inner loop).
 /// `balance_tree` is the optional fallback for SC trees (immutable here).
-fn process_payload(
-    tree: &mut Tree,
+fn process_payload(    tree: &mut Tree,
     balance_tree: Option<&Tree>,
     payload: &AssetPayload,
     parity: bool,
@@ -219,4 +218,117 @@ mod tests {
         assert_eq!(calc_block_reward(7_000_000), 30750);
         assert_eq!(calc_block_reward(14_000_000), 15375);
     }
+}
+
+/// process_transaction_sc — SC install/call dispatch (Go
+/// blockchain.process_transaction_sc). Handles SC_INSTALL (parse + install +
+/// Initialize) and SC_CALL (run entrypoint); commits SC data tree + external
+/// transfers on success, or reverts the incoming value on error.
+#[allow(clippy::too_many_arguments)]
+pub fn process_transaction_sc(
+    cache: &mut std::collections::HashMap<[u8; 32], crate::graviton::Tree>,
+    ss: &mut crate::sc::Snapshot,
+    balance_tree: &mut crate::graviton::Tree,
+    sc_meta: &mut crate::graviton::Tree,
+    bl_height: u64,
+    bl_topoheight: u64,
+    bl_timestamp: u64,
+    blid: &[u8; 32],
+    tx: &Transaction,
+) -> Result<u64, String> {
+    if tx.scdata.is_empty() {
+        return Ok(tx_fees(tx));
+    }
+    let fees = tx_fees(tx);
+    // SCACTION must be present
+    let action = match tx.scdata.get_uint64("SC_ACTION") {
+        Some(a) => a,
+        None => return Ok(fees),
+    };
+    let txid = tx.get_hash(3);
+    let scid = txid; // install: scid = txid
+    let incoming_value: std::collections::HashMap<[u8; 32], u64> = tx
+        .payloads
+        .iter()
+        .map(|p| (p.scid, p.burn_value))
+        .collect();
+    // signer: first ring member of the first zero-scid payload
+    let signer: [u8; 33] = tx
+        .payloads
+        .iter()
+        .find(|p| p.scid.iter().all(|&b| b == 0))
+        .and_then(|p| p.statement.publickeylist.first())
+        .map(|pk| {
+            let mut s = [0u8; 33];
+            s.copy_from_slice(&crate::curve::encode_compressed(pk));
+            s
+        })
+        .unwrap_or([0u8; 33]);
+
+    use crate::sc::{execute_sc_function, process_external, read_sc, sanity_check_external_transfers, sc_code_key, sc_meta_key, store_sc_value, wrapped_tree, TreeWrapper};
+
+    let mut w_sc_tree = TreeWrapper::new(sc_meta.clone());
+    let mut w_sc_data_tree;
+    let entrypoint;
+    let mut meta_type: u8 = 0;
+
+    match action {
+        0 => {
+            // SC_INSTALL
+            let code = match tx.scdata.get_string("SC_CODE") {
+                Some(c) => c,
+                None => return Err("no code provided".into()),
+            };
+            if code.is_empty() {
+                return Err("no code provided".into());
+            }
+            let sc = crate::dvm::parse_smart_contract(&code)
+                .map_err(|e| format!("parse error: {}", e))?;
+            if sc.functions.contains_key("InitializePrivate") {
+                meta_type = 1;
+            }
+            w_sc_data_tree = wrapped_tree(cache, ss, &scid);
+            // install: write code + meta into the wrapped trees
+            let code_var = crate::dvm::Variable::new_string("", &code);
+            w_sc_data_tree.put(&sc_code_key(), &code_var.marshal_binary());
+            // meta: type byte + zeros (Go SC_META_DATA{MarshalBinary})
+            let mut meta_bytes = vec![meta_type];
+            meta_bytes.extend_from_slice(&[0u8; 32]); // datahash zero (pre-HF2)
+            w_sc_tree.put(&sc_meta_key(&scid), &meta_bytes);
+            entrypoint = if meta_type == 1 { "InitializePrivate" } else { "Initialize" }.to_string();
+            let (balance, sc_parsed) = read_sc(&mut w_sc_data_tree, &scid);
+            let sc_parsed = sc_parsed.ok_or("SC not found")?;
+            execute_sc_function(
+                &mut w_sc_tree, &mut w_sc_data_tree, &scid,
+                bl_height, bl_topoheight, bl_timestamp, blid, &txid,
+                &sc_parsed, &entrypoint, balance, &signer, &incoming_value,
+                &[], fees,
+            )?;
+        }
+        1 => {
+            // SC_CALL
+            let scid = tx.scdata.get_hash("SC_ID").unwrap_or([0u8; 32]);
+            let entry = tx.scdata.get_string("entrypoint").ok_or("no entrypoint provided")?;
+            entrypoint = entry;
+            // must be installed
+            if w_sc_tree.get(&sc_meta_key(&scid)).is_none() {
+                return Err("scid not installed".into());
+            }
+            w_sc_data_tree = wrapped_tree(cache, ss, &scid);
+            let (balance, sc_parsed) = read_sc(&mut w_sc_data_tree, &scid);
+            let sc_parsed = sc_parsed.ok_or("SC not found")?;
+            execute_sc_function(
+                &mut w_sc_tree, &mut w_sc_data_tree, &scid,
+                bl_height, bl_topoheight, bl_timestamp, blid, &txid,
+                &sc_parsed, &entrypoint, balance, &signer, &incoming_value,
+                &[], fees,
+            )?;
+        }
+        _ => return Err("unknown action".into()),
+    }
+
+    // sanity check + commit
+    sanity_check_external_transfers(&mut w_sc_data_tree, balance_tree, &scid)?;
+    process_external(cache, ss, balance_tree, &scid, &mut w_sc_data_tree, &mut w_sc_tree);
+    Ok(fees)
 }

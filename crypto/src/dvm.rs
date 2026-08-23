@@ -435,6 +435,30 @@ pub struct SharedState {
 }
 
 impl SharedState {
+    /// Fresh state for SC execution (sc.go Execute_sc_function setup).
+    pub fn new(scid: &[u8; 32], blid: &[u8; 32], txid: &[u8; 32], signer: &[u8; 33], bl_height: u64, bl_topoheight: u64, bl_timestamp: u64) -> Self {
+        let mut rnd_key_bytes = Vec::with_capacity(96);
+        rnd_key_bytes.extend_from_slice(scid);
+        rnd_key_bytes.extend_from_slice(blid);
+        rnd_key_bytes.extend_from_slice(txid);
+        let rnd_key = crate::keccak::keccak256(&rnd_key_bytes);
+        SharedState {
+            scid_zero: [0; 32],
+            scid_self: *scid,
+            gas_compute_used: 0, gas_compute_limit: 0, gas_compute_check: false,
+            gas_store_used: 0, gas_store_limit: 0, gas_store_check: false,
+            chain_inputs: BlockchainInput {
+                scid: *scid, blid: *blid, txid: *txid,
+                signer: String::from_utf8_lossy(signer).to_string(),
+                bl_height, bl_topoheight, bl_timestamp,
+            },
+            assets: HashMap::new(), assets_transfer: HashMap::new(), ram_store: HashMap::new(),
+            monitor_recursion: 0, monitor_lines_interpreted: 0, monitor_ops: 0,
+            store: Box::new(TXStorage { scid: *scid, raw_keys: HashMap::new(), state: None }),
+            rnd: Rnd { key: rnd_key, pos: 1 },
+        }
+    }
+
     pub fn consume_gas(&mut self, c: i64) {
         self.gas_compute_used += c;
         if self.gas_compute_check && self.gas_compute_used > self.gas_compute_limit {
@@ -723,7 +747,12 @@ impl DVMInterpreter {
                 "LET" => self.interpret_let(&line[1..])?,
                 "GOTO" => new_ip = self.interpret_goto(&line[1..])?,
                 "IF" => new_ip = self.interpret_if(&line[1..])?,
-                "RETURN" => self.interpret_return(&line[1..])?,
+                "RETURN" => {
+                    self.interpret_return(&line[1..])?;
+                    // Go: RETURN exits the function immediately — set the
+                    // sentinel so the loop breaks (new_ip = u64::MAX)
+                    new_ip = u64::MAX;
+                }
                 "PRINT" | "PRINTF" => self.interpret_print(&line[1..])?,
                 _ => {
                     // expression statement: must be a function call
@@ -859,7 +888,6 @@ impl DVMInterpreter {
             _ => panic!("unexpected data type"),
         }
         self.state.monitor_recursion -= 1;
-        self.return_value.value_uint64 = u64::MAX; // sentinel
         Ok(())
     }
 

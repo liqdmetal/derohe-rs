@@ -1436,6 +1436,58 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 }
                 Ok(json!({"hash": hex::encode(bt.hash())}))
             }
+            "chain_sc_install" => {
+                use dero_crypto::sc::{self, Snapshot, TreeWrapper};
+                use dero_crypto::graviton::Tree;
+                use std::collections::HashMap;
+                let blob = hex_decode(&s("blob")?)?;
+                let tx = dero_crypto::transaction::Transaction::deserialize(&blob, 3)?;
+                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                // fresh snapshot + cache
+                let mut ss = Snapshot { trees: HashMap::new() };
+                let mut cache: HashMap<[u8; 32], Tree> = HashMap::new();
+                let mut bt = Tree::new("B");
+                let mut mt = Tree::new("M");
+                let txid = tx.get_hash(3);
+                let scid = txid;
+                // signer: from JSON (harness knows the ring keys)
+                let signer: [u8; 33] = if let Ok(s) = hex_decode(&s_key(inp, "signer").unwrap_or_default()) {
+                    let mut s2 = [0u8; 33];
+                    let n = s.len().min(33);
+                    s2[..n].copy_from_slice(&s[..n]);
+                    s2
+                } else if let Some(p) = tx.payloads.first() {
+                    let st = &p.statement;
+                    if !st.publickeylist.is_empty() {
+                        let pk = dero_crypto::curve::encode_compressed(&st.publickeylist[0]);
+                        let mut s2 = [0u8; 33];
+                        s2.copy_from_slice(&pk);
+                        s2
+                    } else { [0u8; 33] }
+                } else { [0u8; 33] };
+                if bt.get(&signer.to_vec()).is_none() {
+                    if let Ok(pk) = dero_crypto::curve::decode_compressed(&signer) {
+                        let zb = dero_crypto::elgamal::ElGamal::new(pk, dero_crypto::hash_to_point::base_g());
+                        let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+                        bt.put(&signer, &nb.serialize());
+                    }
+                }
+                // process_transaction_sc: if the tx has SCDATA with SCACTION
+                // SC_INSTALL + SCCODE, parse + install + run Initialize
+                let gas = match dero_crypto::chain::process_transaction_sc(
+                    &mut cache, &mut ss, &mut bt, &mut mt,
+                    height, height, 0, &txid, &tx,
+                ) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        return Ok(json!({"err": e, "gas": "0"}));
+                    }
+                };
+                let data_root = cache.get(&scid).map(|t| hex::encode(t.hash())).unwrap_or_default();
+                let balance_root = hex::encode(bt.hash());
+                Ok(json!({"scid": hex::encode(scid), "gas": gas.to_string(),
+                          "data_root": data_root, "balance_root": balance_root}))
+            }
             "bp_debug" => {
                 let st = statement_from_in(inp)?;
                 let rand = hex_decode(&s("rand")?)?;

@@ -3154,19 +3154,60 @@ func handle(id int, op string, raw json.RawMessage) {
 		store, _ := graviton.NewMemStore()
 		ss, _ := store.LoadSnapshot(0)
 		cache := map[crypto.Hash]*graviton.Tree{}
-		bt, _ := ss.GetTree(config.BALANCE_TREE)
+		bt, _ := gravTree("B") // SHARED persistent tree (harness pre-registers)
 		mt, _ := ss.GetTree(config.SC_META)
 		txid := tx.GetHash()
 		scid := txid
+		// expand the tx against a balance tree with the ring keys registered
+		// (the real chain expands before SC processing)
+		chain := &blockchain.Blockchain{}
+		_ = chain
+		// register ring keys on bt
+		for t := range tx.Payloads {
+			for i := 0; i < int(tx.Payloads[t].Statement.RingSize); i++ {
+				key_pointer := tx.Payloads[t].Statement.Publickeylist_pointers[i*int(tx.Payloads[t].Statement.Bytes_per_publickey) : (i+1)*int(tx.Payloads[t].Statement.Bytes_per_publickey)]
+				if _, kc, _, err := bt.GetKeyValueFromHash(key_pointer); err == nil {
+					if _, err := bt.Get(kc); err != nil {
+						var acckey crypto.Point
+						if err := acckey.DecodeCompressed(kc); err == nil {
+							zb := crypto.ConstructElGamal(acckey.G1(), crypto.ElGamal_BASE_G)
+							nb := crypto.NonceBalance{NonceHeight: 0, Balance: zb}
+							bt.Put(kc, nb.Serialize())
+						}
+					}
+				}
+			}
+		}
+		// Expand the tx (needs the balance tree at tx.BLID — we use bt)
+		// Go's Expand_Transaction_NonCoinbase requires chain state; emulate
+		// it by loading the statement keys directly from the pointers:
+		// build Publickeylist_compressed from the tree lookups.
+		for t := range tx.Payloads {
+			st := &tx.Payloads[t].Statement
+			st.Publickeylist_compressed = st.Publickeylist_compressed[:0]
+			for i := 0; i < int(st.RingSize); i++ {
+				key_pointer := st.Publickeylist_pointers[i*int(st.Bytes_per_publickey) : (i+1)*int(st.Bytes_per_publickey)]
+				if _, kc, _, err := bt.GetKeyValueFromHash(key_pointer); err == nil {
+					var pc [33]byte
+					copy(pc[:], kc)
+					st.Publickeylist_compressed = append(st.Publickeylist_compressed, pc)
+				}
+			}
+		}
+		// re-serialize to sync Statement fields the SC path needs
+		ser2 := tx.Serialize()
+		var tx3 transaction.Transaction
+		if err := tx3.Deserialize(ser2); err != nil {
+			fail(id, err)
+			return
+		}
+		tx = tx3
+		// register the signer
 		signer := [33]byte{}
 		if s, err := unhex(optionalStr(in, "signer", "")); err == nil && len(s) == 33 {
 			copy(signer[:], s)
 		} else if len(tx.Payloads) > 0 && len(tx.Payloads[0].Statement.Publickeylist_compressed) > 0 {
 			signer = tx.Payloads[0].Statement.Publickeylist_compressed[0]
-		} else {
-			// no signer provided and not expanded: derive from the first
-			// statement's first pointer is impossible (keyhash only); fall
-			// back to zeros (process_transaction_sc allows anonymous SCs)
 		}
 		if _, err := bt.Get(signer[:]); err != nil {
 			var acckey crypto.Point
@@ -3176,26 +3217,16 @@ func handle(id int, op string, raw json.RawMessage) {
 				bt.Put(signer[:], nb.Serialize())
 			}
 		}
-		gas, err := blockchain.OracleProcessTxSC(cache, ss, height, height, 0, txid, tx, bt, mt)
+		gas, err, dr, mr, clen := blockchain.OracleProcessTxSCDebug(cache, ss, height, height, 0, txid, tx, bt, mt)
 		if err != nil {
-			ok(id, map[string]interface{}{"err": err.Error(), "gas": fmt.Sprintf("%d", gas)})
+			ok(id, map[string]interface{}{"err": err.Error(), "gas": fmt.Sprintf("%d", gas),
+				"cache_len": clen, "data_root": hex.EncodeToString(dr), "meta_root": hex.EncodeToString(mr)})
 			return
-		}
-		// debug: dump whether the SC meta tree has the SCID entry
-		meta_found := false
-		if meta_bytes, merr := mt.Get(scid[:]); merr == nil {
-			meta_found = true
-			_ = meta_bytes
-		}
-		h := []byte{}
-		if t, ok := cache[scid]; ok && t != nil {
-			hh, _ := t.Hash()
-			h = hh[:]
 		}
 		hh, _ := bt.Hash()
 		ok(id, map[string]interface{}{"scid": hex.EncodeToString(scid[:]), "gas": fmt.Sprintf("%d", gas),
-			"data_root": hex.EncodeToString(h), "balance_root": hex.EncodeToString(hh[:]),
-			"meta_found": meta_found})
+			"data_root": hex.EncodeToString(dr), "balance_root": hex.EncodeToString(hh[:]),
+			"cache_len": clen, "meta_root": hex.EncodeToString(mr)})
 
 	default:
 		fail(id, fmt.Errorf("unknown op %q", op))

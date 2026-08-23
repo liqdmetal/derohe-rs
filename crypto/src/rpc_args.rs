@@ -45,11 +45,37 @@ pub struct Argument {
     pub value: ArgValue,
 }
 
+/// SCACTION / SCCODE / SC_ID argument names (rpc sc_* constants).
+pub const SC_ACTION: &str = "SC_ACTION";
+pub const SC_CODE: &str = "SC_CODE";
+pub const SC_ID: &str = "SC_ID";
+
 /// rpc.Arguments — a vec of Argument (newtype so we can impl methods).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Arguments(pub Vec<Argument>);
 
 impl Arguments {
+    pub fn get(&self, name: &str) -> Option<&Argument> {
+        self.0.iter().find(|a| a.name == name)
+    }
+    pub fn get_uint64(&self, name: &str) -> Option<u64> {
+        match self.get(name) {
+            Some(Argument { value: ArgValue::U64(v), .. }) => Some(*v),
+            _ => None,
+        }
+    }
+    pub fn get_string(&self, name: &str) -> Option<String> {
+        match self.get(name) {
+            Some(Argument { value: ArgValue::Str(v), .. }) => Some(v.clone()),
+            _ => None,
+        }
+    }
+    pub fn get_hash(&self, name: &str) -> Option<[u8; 32]> {
+        match self.get(name) {
+            Some(Argument { value: ArgValue::Hash(v), .. }) => Some(*v),
+            _ => None,
+        }
+    }
     pub fn iter(&self) -> std::slice::Iter<'_, Argument> {
         self.0.iter()
     }
