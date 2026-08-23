@@ -910,11 +910,50 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "block_deserialize" => {
                 let b = hex_decode(&s("bytes")?)?;
                 let bl = dero_crypto::block::Block::deserialize(&b)?;
+                let mut miner_stmts = Vec::new();
+                for p in &bl.miner_tx.payloads {
+                    let st = &p.statement;
+                    miner_stmts.push(serde_json::json!({
+                        "roothash": hex::encode(st.roothash),
+                        "fees": st.fees.to_string(),
+                        "ring": st.pointers.len() / 3,
+                    }));
+                }
                 Ok(json!({
                     "bytes": hex::encode(bl.serialize(false)),
                     "hash": hex::encode(bl.get_hash()),
                     "miner_tx_hash": hex::encode(bl.miner_tx.get_hash(3)),
+                    "miner_statements": miner_stmts,
                 }))
+            }
+            "chain_block_apply" => {
+                // apply a REAL block blob's miner tx to the persistent "B"
+                // tree (rewards to integrator + miniblock miners) and return
+                // the new root. Genesis flag seeds the premine.
+                use dero_crypto::chain;
+                use dero_crypto::elgamal::ElGamal;
+                use dero_crypto::hash_to_point::base_g;
+                let b = hex_decode(&s("blob")?)?;
+                let bl = dero_crypto::block::Block::deserialize(&b)?;
+                let genesis = s_key(inp, "genesis").map(|v| v == "true").unwrap_or(false);
+                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let bt = grav_tree_mut("B");
+                if !genesis {
+                    // ensure the miner is registered (zero balance) so the
+                    // reward add works; real chain has it from an earlier tx
+                    if bt.get(&bl.miner_tx.miner_address.to_vec()).is_none() {
+                        if let Ok(pk) = dero_crypto::curve::decode_compressed(&bl.miner_tx.miner_address) {
+                            let zb = ElGamal::new(pk, base_g());
+                            let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+                            bt.put(&bl.miner_tx.miner_address, &nb.serialize());
+                        }
+                    }
+                }
+                chain::process_miner_transaction(
+                    &bl.miner_tx.miner_address, bl.miner_tx.value,
+                    &bl.mini_blocks, genesis, bt, 0, height,
+                );
+                Ok(json!({"hash": hex::encode(bt.hash())}))
             }
             "tx_build_valid" => {
                 let tx = build_valid_tx(inp)?;
