@@ -1512,10 +1512,13 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     }
                 }
                 // process_transaction_sc: if the tx has SCDATA with SCACTION
-                // SC_INSTALL + SCCODE, parse + install + run Initialize
+                // SC_INSTALL + SCCODE, parse + install + run Initialize.
+                // k0_floor is the B1/B2 activation height (Go
+                // K0_MIN_RING4_HEIGHT); omitted => pre-fork (NoSigner never set).
+                let k0_floor = s_key(inp, "k0_floor").ok().and_then(|v| v.parse::<u64>().ok());
                 let gas = match dero_crypto::chain::process_transaction_sc(
                     &mut cache, &mut ss, &mut bt, &mut mt,
-                    height, height, 0, &txid, &tx,
+                    height, height, 0, &txid, &tx, k0_floor,
                 ) {
                     Ok(g) => g,
                     Err(e) => {
@@ -1524,8 +1527,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 };
                 let data_root = cache.get(&scid).map(|t| hex::encode(t.hash())).unwrap_or_default();
                 let balance_root = hex::encode(bt.hash());
+                let meta_root = hex::encode(mt.hash());
                 Ok(json!({"scid": hex::encode(scid), "gas": gas.to_string(),
-                          "data_root": data_root, "balance_root": balance_root}))
+                          "data_root": data_root, "balance_root": balance_root,
+                          "meta_root": meta_root}))
             }
             "bp_debug" => {
                 let st = statement_from_in(inp)?;

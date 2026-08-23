@@ -218,6 +218,36 @@ mod tests {
         assert_eq!(calc_block_reward(7_000_000), 30750);
         assert_eq!(calc_block_reward(14_000_000), 15375);
     }
+
+    #[test]
+    fn contract_uses_signer_detection() {
+        use crate::dvm::contract_uses_signer;
+        use crate::dvm::parse_smart_contract;
+        // SIGNER in body -> true
+        let sc = parse_smart_contract(
+            "Function F() Uint64\n10 dim x as String\n20 LET x = SIGNER()\n30 RETURN 0\nEnd Function",
+        )
+        .unwrap();
+        assert!(contract_uses_signer(&sc));
+        // lowercase signer -> true (case-insensitive dispatch)
+        let sc = parse_smart_contract(
+            "Function F() Uint64\n10 dim x as String\n20 LET x = signer()\n30 RETURN 0\nEnd Function",
+        )
+        .unwrap();
+        assert!(contract_uses_signer(&sc));
+        // no SIGNER -> false
+        let sc = parse_smart_contract(
+            "Function Init() Uint64\n10 STORE(\"owner\", \"alice\")\n20 RETURN 0\nEnd Function",
+        )
+        .unwrap();
+        assert!(!contract_uses_signer(&sc));
+        // REM comment mentioning SIGNER -> false (whole-line comment, Go parity)
+        let sc = parse_smart_contract(
+            "Function C() Uint64\n10 REM SIGNER is mentioned in a comment\n20 RETURN 0\nEnd Function",
+        )
+        .unwrap();
+        assert!(!contract_uses_signer(&sc));
+    }
 }
 
 /// process_transaction_sc — SC install/call dispatch (Go
@@ -235,6 +265,7 @@ pub fn process_transaction_sc(
     bl_timestamp: u64,
     blid: &[u8; 32],
     tx: &Transaction,
+    k0_floor_height: Option<u64>,
 ) -> Result<u64, String> {
     if tx.scdata.is_empty() {
         return Ok(tx_fees(tx));
@@ -267,6 +298,12 @@ pub fn process_transaction_sc(
 
     use crate::sc::{execute_sc_function, process_external, read_sc, sanity_check_external_transfers, sc_code_key, sc_meta_key, store_sc_value, wrapped_tree, TreeWrapper};
 
+    // NOTE: Go wraps the CALLER's sc_tree directly (transaction_execute.go:
+    // w_sc_tree := &Tree_Wrapper{Tree: sc_tree, ...}) so meta writes land in
+    // the tree the caller hashes. We clone for the wrapper (owning the
+    // mutable entry buffer) and flush back into the caller's sc_meta after
+    // process_external, so the caller's tree reflects the SC meta (incl. the
+    // K0 B2 NoSigner bit) exactly like Go's.
     let mut w_sc_tree = TreeWrapper::new(sc_meta.clone());
     let mut w_sc_data_tree;
     let entrypoint;
@@ -286,6 +323,16 @@ pub fn process_transaction_sc(
                 .map_err(|e| format!("parse error: {}", e))?;
             if sc.functions.contains_key("InitializePrivate") {
                 meta_type = 1;
+            }
+            // K0 Fix B2 (Go mirror): from the fork height onward, a contract
+            // that never calls SIGNER() gets the NoSigner bit (0x80) in the
+            // meta Type byte — ringsize-2 SC_TX to it is then rejected at
+            // consensus. Must match Go byte-for-byte or the SC_META tree
+            // (chain state root) diverges. Pre-fork: bit never set.
+            if let Some(floor) = k0_floor_height {
+                if bl_height >= floor && !crate::dvm::contract_uses_signer(&sc) {
+                    meta_type |= 0x80;
+                }
             }
             w_sc_data_tree = wrapped_tree(cache, ss, &scid);
             // install: write code + meta into the wrapped trees
@@ -330,5 +377,13 @@ pub fn process_transaction_sc(
     // sanity check + commit
     sanity_check_external_transfers(&mut w_sc_data_tree, balance_tree, &scid)?;
     process_external(cache, ss, balance_tree, &scid, &mut w_sc_data_tree, &mut w_sc_tree);
+    // flush the cloned meta tree's SC-meta entry back into the caller's
+    // sc_meta so the caller's tree reflects the SC meta (incl. the K0 B2
+    // NoSigner bit), matching Go where the wrapper wraps the caller's tree
+    // directly.
+    let meta_key = sc_meta_key(&scid);
+    if let Some(v) = w_sc_tree.tree.get(&meta_key) {
+        sc_meta.put(&meta_key, &v);
+    }
     Ok(fees)
 }

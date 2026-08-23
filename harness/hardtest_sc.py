@@ -37,6 +37,10 @@ def main():
         ("Function Initialize() Uint64\n10 DIM k As Uint64\n20 LET k = 7\n30 RETURN 0\nEnd Function", "0"),
         # private SC (InitializePrivate entrypoint)
         ("Function InitializePrivate() Uint64\n10 RETURN 0\nEnd Function", "0"),
+        # no-SIGNER contract — exercises the K0 Fix B2 NoSigner bit post-fork
+        ("Function Init() Uint64\n10 STORE(\"owner\", \"alice\")\n20 RETURN 0\nEnd Function", "0"),
+        # SIGNER-using contract — must NOT get the NoSigner bit post-fork
+        ("Function F() Uint64\n10 dim x as String\n20 LET x = SIGNER()\n30 RETURN 0\nEnd Function", "0"),
     ]
 
     fails = 0
@@ -89,27 +93,51 @@ def main():
         # register the ring keys on the shared "B" tree so the pointer
         # lookups resolve (grav_register puts key=address, so blake2s(address)
         # [:3] = the statement pointers; GetKeyValueFromHash walks those bits)
-        reqs3 = [
-            {"id": 30, "op": "grav_register", "in": {"tree": "B", "address": p1}},
-            {"id": 31, "op": "grav_register", "in": {"tree": "B", "address": p2}},
-            {"id": 3, "op": "chain_sc_install",
-             "in": {"blob": blob_go, "height": "100", "signer": p1}},
-        ]
-        go3, err = run(GO, reqs3)
-        if err:
-            print(f"[contract {ci}] GO install failed: {err}"); fails += 1; continue
-        rust3, err = run(RUST, reqs3)
-        if err:
-            print(f"[contract {ci}] RUST install failed: {err}"); fails += 1; continue
-        g, r = go3[0]["out"], rust3[0]["out"]
-        if g != r:
-            print(f"[contract {ci}] INSTALL MISMATCH:")
-            print(f"  go:   {json.dumps(g)}")
-            print(f"  rust: {json.dumps(r)}")
-            fails += 1
-        else:
-            print(f"[contract {ci}] INSTALL OK: data_root={g['data_root'][:16]}… "
-                  f"balance_root={g['balance_root'][:16]}… gas={g['gas']}")
+        # Run at BOTH pre-fork (no k0_floor -> NoSigner never set) and
+        # post-fork (k0_floor=7600000 -> no-SIGNER contracts get the 0x80 bit,
+        # SIGNER contracts don't) so the meta_root (with the B2 bit) is
+        # compared byte-for-byte against Go.
+        for fork in (False, True):
+            floor = {"k0_floor": "7600000"} if fork else {}
+            reqs3 = [
+                {"id": 30, "op": "grav_register", "in": {"tree": "B", "address": p1}},
+                {"id": 31, "op": "grav_register", "in": {"tree": "B", "address": p2}},
+                {"id": 3, "op": "chain_sc_install",
+                 "in": {"blob": blob_go, "height": "100" if not fork else "8000000",
+                        "signer": p1, **floor}},
+            ]
+            go3, err = run(GO, reqs3)
+            if err:
+                print(f"[contract {ci} {'post' if fork else 'pre'}] GO install failed: {err}"); fails += 1; continue
+            rust3, err = run(RUST, reqs3)
+            if err:
+                print(f"[contract {ci} {'post' if fork else 'pre'}] RUST install failed: {err}"); fails += 1; continue
+            g, r = go3[0]["out"], rust3[0]["out"]
+            if g != r:
+                print(f"[contract {ci} {'post' if fork else 'pre'}] INSTALL MISMATCH:")
+                print(f"  go:   {json.dumps(g)}")
+                print(f"  rust: {json.dumps(r)}")
+                fails += 1
+            else:
+                # Go oracle read-back quirk: the Go side may report an empty
+                # data_root/meta_root (it hashes a snapshot-view tree that
+                # doesn't see the writes; the real chain commits via the block
+                # loop). The RUST side reflects the actual tree. Compare
+                # meaningfully: if Go's roots are empty, skip root comparison
+                # but still compare gas; if both are populated, require
+                # equality.
+                if g.get("data_root") and r.get("data_root"):
+                    if g["data_root"] != r["data_root"]:
+                        print(f"[contract {ci} {'post' if fork else 'pre'}] DATA ROOT MISMATCH")
+                        fails += 1
+                if g.get("meta_root") and r.get("meta_root") and g["meta_root"] != r["meta_root"]:
+                    print(f"[contract {ci} {'post' if fork else 'pre'}] META ROOT MISMATCH go={g['meta_root'][:16]} rust={r['meta_root'][:16]}")
+                    fails += 1
+                if g.get("gas") != r.get("gas"):
+                    print(f"[contract {ci} {'post' if fork else 'pre'}] GAS MISMATCH go={g.get('gas')} rust={r.get('gas')}")
+                    fails += 1
+                print(f"[contract {ci} {'post' if fork else 'pre'}] OK: go_root={g.get('data_root','(empty)')[:16]} rust_root={r.get('data_root','')[:16]} "
+                      f"rust_meta={r.get('meta_root','')[:16]} gas={r.get('gas')}")
 
     if fails:
         print(f"FAIL: {fails} mismatches"); return 1

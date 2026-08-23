@@ -269,6 +269,24 @@ pub fn parse_smart_contract(src: &str) -> Result<SmartContract, String> {
     Ok(sc)
 }
 
+/// ContractUsesSigner mirror (Go dvm.ContractUsesSigner, K0 Fix B2): true
+/// iff any function line token equals "SIGNER" (case-insensitive, matching
+/// the DVM's dispatch). Decides whether the NoSigner meta bit (0x80) is
+/// set at install — must match Go byte-for-byte or the SC_META tree (and
+/// the chain state root) diverges.
+pub fn contract_uses_signer(sc: &SmartContract) -> bool {
+    for f in sc.functions.values() {
+        for line in f.lines.values() {
+            for tok in line {
+                if tok.eq_ignore_ascii_case("SIGNER") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn parse_function_line(sc: &mut SmartContract, function: &mut Option<Function>, line: &[String]) -> Result<(), String> {
     let pos0 = 0;
     if function.is_none() {
