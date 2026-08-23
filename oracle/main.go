@@ -3190,6 +3190,14 @@ func handle(id int, op string, raw json.RawMessage) {
 			return
 		}
 		height, _ := strconv.ParseUint(optionalStr(in, "height", "0"), 10, 64)
+		// K0 Fix B2: the floor override lets vectors sweep pre/post-fork
+		// installs (NoSigner bit set only from the fork height). The
+		// reference's install path keys off globals.Config.K0_MIN_RING4_HEIGHT.
+		if f := optionalStr(in, "k0_floor", ""); f != "" {
+			if fl, ferr := strconv.ParseInt(f, 10, 64); ferr == nil {
+				globals.Config.K0_MIN_RING4_HEIGHT = fl
+			}
+		}
 		store, _ := graviton.NewMemStore()
 		ss, _ := store.LoadSnapshot(0)
 		cache := map[crypto.Hash]*graviton.Tree{}
