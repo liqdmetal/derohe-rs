@@ -1203,6 +1203,34 @@ func handle(id int, op string, raw json.RawMessage) {
 		r := new(bn256.G1).ScalarMult(p, k)
 		ok(id, map[string]string{"point": hx(r.EncodeCompressed())})
 
+	case "strict_point_decode":
+		// Mirror of dvm.strictDecodeG1 (I3/v9 wargame fix): canonical
+		// compressed encodings must have x < p. Pins the accept/reject
+		// boundary between Go and the clean-room Rust port. Verdict-only
+		// output (ok bool) — the error text is diagnostic, the verdict is
+		// what must match across implementations.
+		ps, err := s(in, "point")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		pb, err := hex.DecodeString(ps)
+		if err != nil || len(pb) != 33 {
+			ok(id, map[string]interface{}{"ok": false})
+			return
+		}
+		xi := new(big.Int).SetBytes(pb[0:32])
+		if xi.Cmp(bn256.P) >= 0 {
+			ok(id, map[string]interface{}{"ok": false})
+			return
+		}
+		var pt bn256.G1
+		if derr := pt.DecodeCompressed(pb); derr != nil {
+			ok(id, map[string]interface{}{"ok": false})
+			return
+		}
+		ok(id, map[string]interface{}{"ok": true})
+
 	case "point_add":
 		as, err := s(in, "a")
 		if err != nil {

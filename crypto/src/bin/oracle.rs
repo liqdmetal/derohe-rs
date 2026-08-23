@@ -1562,6 +1562,24 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let r = a + b;
                 Ok(json!({"point": hex::encode(encode_compressed(&r))}))
             }
+            "strict_point_decode" => {
+                // Mirror of Go dvm.strictDecodeG1 (K0/I3 wargame fix): a
+                // canonical compressed encoding must have x < p. Go's
+                // lenient decoder accepts x>=p; the strict boundary must
+                // match across implementations or contracts diverge.
+                // point_from_hex already applies the strict x < p check
+                // (curve.rs:102: Fq::from_bigint -> "x >= field prime").
+                // Verdict-only output — the err text is diagnostic.
+                let b = hex_decode(&s("point")?)?;
+                if b.len() != 33 {
+                    Ok(json!({"ok": false}))
+                } else {
+                    match point_from_hex(&s("point")?) {
+                        Ok(_) => Ok(json!({"ok": true})),
+                        Err(_) => Ok(json!({"ok": false})),
+                    }
+                }
+            }
             "point_neg" => {
                 let p = point_from_hex(&s("point")?)?;
                 let r = -p;
