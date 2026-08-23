@@ -1314,13 +1314,48 @@ End Function""",
     go_q = run_oracle(GO_ORACLE, phase_q)
     rust_q = run_oracle(RUST_ORACLE, phase_q)
 
+    # ---- Phase R: K0 rules differential (dvm_uses_signer) -------------------
+    # Mirrors dvm.ContractUsesSigner (K0 Fix B2): Go and Rust must agree on
+    # whether a contract calls SIGNER() — the rule that decides ringsize-2
+    # SC_TX eligibility. A divergence here would mis-tag contracts at the
+    # fork (NoSigner bit set/cleared differently) and split the chain.
+    phase_r = []
+    iid = 9500000
+
+    def add_r(code):
+        nonlocal iid
+        phase_r.append({"id": iid, "op": "dvm_uses_signer", "in": {"code": code}})
+        iid += 1
+
+    # deterministic corpus: SIGNER variants, no-SIGNER, comment/string traps
+    k0_corpus = [
+        'Function F() Uint64\n10 dim x as String\n20 LET x = SIGNER()\n30 RETURN 0\nEnd Function',
+        'Function F() Uint64\n10 dim x as String\n20 LET x = signer()\n30 RETURN 0\nEnd Function',
+        'Function F() Uint64\n10 dim x as String\n20 LET x = Signer()\n30 RETURN 0\nEnd Function',
+        'Function Init() Uint64\n10 STORE("owner", "alice")\n20 RETURN 0\nEnd Function',
+        'Function A() Uint64\n10 RETURN SIGNER()\nEnd Function',
+        'Function B() Uint64\n10 IF SIGNER() == LOAD("owner") THEN GOTO 20\n15 RETURN 1\n20 RETURN 0\nEnd Function',
+        'Function C() Uint64\n10 REM SIGNER is mentioned in a comment\n20 RETURN 0\nEnd Function',
+        'Function D() Uint64\n10 STORE("note", "SIGNER")\n20 RETURN 0\nEnd Function',
+        'Function E() Uint64\n10 dim x as String\n20 LET x = "SIGNER()"\n30 RETURN 0\nEnd Function',
+        'Function F2() Uint64\n10 dim x as String\n20 LET x = SIG\n30 RETURN 0\nEnd Function',
+        # empty / malformed
+        '',
+        'not valid code at all',
+    ]
+    for c in k0_corpus:
+        add_r(c)
+
+    go_r = run_oracle(GO_ORACLE, phase_r)
+    rust_r = run_oracle(RUST_ORACLE, phase_r)
+
     # ---- compare -----------------------------------------------------------
     failures = []
     per_op = {}
 
     def check(resp_go, resp_rust):
         op = None
-        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q):
+        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r):
             if r["id"] == resp_go["id"]:
                 op = r["op"]
                 break
@@ -1334,7 +1369,7 @@ End Function""",
             failures.append((op, resp_go["id"], f"expected x>=p divergence, got go={g_ok} rust={r_ok}"))
             return
         if g_ok != r_ok:
-            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q) if r["id"] == resp_go["id"]), None)
+            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r) if r["id"] == resp_go["id"]), None)
             failures.append(
                 (op, resp_go["id"], f"ok mismatch: go={g_ok} rust={r_ok} "
                  f"go_err={resp_go.get('err')} rust_err={resp_rust.get('err')} req={json.dumps(req)}")
@@ -1346,7 +1381,7 @@ End Function""",
             go_out = {k: v for k, v in resp_go["out"].items() if not k.startswith("snap_")}
             rust_out = {k: v for k, v in resp_rust["out"].items() if not k.startswith("snap_")}
             if go_out != rust_out:
-                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q) if r["id"] == resp_go["id"]), None)
+                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r) if r["id"] == resp_go["id"]), None)
                 failures.append(
                     (op, resp_go["id"], f"out mismatch:\n  go:   {json.dumps(go_out)}\n  rust: {json.dumps(rust_out)}\n  req:  {json.dumps(req)}")
                 )
@@ -1386,6 +1421,8 @@ End Function""",
         check(go_p[r["id"]], rust_p[r["id"]])
     for r in phase_q:
         check(go_q[r["id"]], rust_q[r["id"]])
+    for r in phase_r:
+        check(go_r[r["id"]], rust_r[r["id"]])
 
     # real-chain tx verify: verdicts must AGREE (accept-path agreement)
     for cid, label in ((r["id"], r["id"]) for r in phase_o):
@@ -1440,7 +1477,7 @@ End Function""",
         else:
             failures.append(("proof_cross_verify", cid, f"missing cross-verify response go={g} rust={r}"))
 
-    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n) + len(phase_o) + len(phase_p) + len(phase_q)
+    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n) + len(phase_o) + len(phase_p) + len(phase_q) + len(phase_r)
     print(f"\n=== differential results: {total} vectors ===")
     for op, cnt in sorted(per_op.items()):
         print(f"  {op:32s} {cnt:4d}")

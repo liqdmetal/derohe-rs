@@ -234,13 +234,17 @@ pub fn parse_smart_contract(src: &str) -> Result<SmartContract, String> {
 
     // group tokens by line (in order)
     let mut lines: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut rem_line: Option<u32> = None; // current line is a REM/; comment
     for (ln, tok) in tokens {
         if tok.starts_with(';') || tok.starts_with("REM") {
-            // skip whole line if first token
-            if lines.last().map(|(l, _)| *l == ln).unwrap_or(false) && lines.last().unwrap().1.len() == 1 {
-                lines.pop();
-            }
+            // Go skips the WHOLE line once any token is ; or REM
+            // (dvm.go: skip_line = s.Position.Line; every token on that
+            // line is then skipped). Flag the line; drop it at the end.
+            rem_line = Some(ln);
             continue;
+        }
+        if rem_line == Some(ln) {
+            continue; // still on a comment line
         }
         if lines.last().map(|(l, _)| *l == ln).unwrap_or(false) {
             lines.last_mut().unwrap().1.push(tok);
@@ -248,9 +252,10 @@ pub fn parse_smart_contract(src: &str) -> Result<SmartContract, String> {
             lines.push((ln, vec![tok]));
         }
     }
-    // drop lines that start with ; or REM (first token)
-    lines.retain(|(_, toks)| !(toks.first().map(|t| t.starts_with(';')).unwrap_or(false)
-        || toks.first().map(|t| t.starts_with("REM")).unwrap_or(false)));
+    // drop any line that was a comment
+    lines.retain(|(_, toks)| {
+        !toks.iter().any(|t| t.starts_with(';') || t.starts_with("REM"))
+    });
 
     for (ln, line) in lines {
         let _ = ln;
