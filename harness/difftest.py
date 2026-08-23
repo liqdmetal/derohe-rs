@@ -1108,13 +1108,42 @@ End Function""",
     go_n = run_oracle(GO_ORACLE, phase_n)
     rust_n = run_oracle(RUST_ORACLE, phase_n)
 
+    # ---- Phase O: real chain tx proof verification -------------------------
+    # Fetch live mainnet block blobs, extract the miner tx on BOTH sides,
+    # compare the txid/statement/proof bytes and the verify verdict (must
+    # AGREE — same semantics as the cross-accept).
+    phase_o = []
+    iid = 7000000
+
+    def add_o(op, inp):
+        nonlocal iid
+        phase_o.append({"id": iid, "op": op, "in": inp})
+        iid += 1
+
+    try:
+        import urllib.request
+        for bh in (0, 1, 100, 1000, 500000, 1000000, 3000000, 5000000, 7000000, 7511600):
+            body = json.dumps({"jsonrpc": "2.0", "id": 0, "method": "DERO.GetBlock",
+                               "params": {"height": bh}}).encode()
+            req = urllib.request.Request("http://82.65.143.182:10102/json_rpc",
+                                         data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                blob = json.loads(resp.read()).get("result", {}).get("blob")
+            if blob:
+                add_o("tx_extract_verify", {"blob": blob})
+    except Exception as e:
+        print(f"  [note] phase_o live-block fetch skipped: {e}")
+
+    go_o = run_oracle(GO_ORACLE, phase_o)
+    rust_o = run_oracle(RUST_ORACLE, phase_o)
+
     # ---- compare -----------------------------------------------------------
     failures = []
     per_op = {}
 
     def check(resp_go, resp_rust):
         op = None
-        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n):
+        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o):
             if r["id"] == resp_go["id"]:
                 op = r["op"]
                 break
@@ -1128,7 +1157,7 @@ End Function""",
             failures.append((op, resp_go["id"], f"expected x>=p divergence, got go={g_ok} rust={r_ok}"))
             return
         if g_ok != r_ok:
-            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n) if r["id"] == resp_go["id"]), None)
+            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o) if r["id"] == resp_go["id"]), None)
             failures.append(
                 (op, resp_go["id"], f"ok mismatch: go={g_ok} rust={r_ok} "
                  f"go_err={resp_go.get('err')} rust_err={resp_rust.get('err')} req={json.dumps(req)}")
@@ -1140,7 +1169,7 @@ End Function""",
             go_out = {k: v for k, v in resp_go["out"].items() if not k.startswith("snap_")}
             rust_out = {k: v for k, v in resp_rust["out"].items() if not k.startswith("snap_")}
             if go_out != rust_out:
-                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n) if r["id"] == resp_go["id"]), None)
+                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o) if r["id"] == resp_go["id"]), None)
                 failures.append(
                     (op, resp_go["id"], f"out mismatch:\n  go:   {json.dumps(go_out)}\n  rust: {json.dumps(rust_out)}\n  req:  {json.dumps(req)}")
                 )
@@ -1174,6 +1203,19 @@ End Function""",
         check(go_m[r["id"]], rust_m[r["id"]])
     for r in phase_n:
         check(go_n[r["id"]], rust_n[r["id"]])
+    for r in phase_o:
+        check(go_o[r["id"]], rust_o[r["id"]])
+
+    # real-chain tx verify: verdicts must AGREE (accept-path agreement)
+    for cid, label in ((r["id"], r["id"]) for r in phase_o):
+        g = go_o.get(cid)
+        rsp = rust_o.get(cid)
+        if g and rsp and g.get("ok") and rsp.get("ok"):
+            gv = g["out"].get("payload", {}).get("verified")
+            rv = rsp["out"].get("payload", {}).get("verified")
+            if gv != rv:
+                failures.append(("tx_extract_verify_agree", cid,
+                                 f"verify verdict mismatch go={gv} rust={rv}"))
 
     # valid-tx cross-accept: each side must ACCEPT the other's proof
     for cid, label, kind in cross_i_expect:
@@ -1217,7 +1259,7 @@ End Function""",
         else:
             failures.append(("proof_cross_verify", cid, f"missing cross-verify response go={g} rust={r}"))
 
-    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n)
+    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n) + len(phase_o)
     print(f"\n=== differential results: {total} vectors ===")
     for op, cnt in sorted(per_op.items()):
         print(f"  {op:32s} {cnt:4d}")

@@ -4,7 +4,7 @@ Phase 0/1 spike: **differential testing harness + first crypto module**, proving
 that a Rust implementation can be verified byte-for-byte against the Go
 reference (`deroproject/derohe`) before we commit to the full port.
 
-**Status: PASS — 2,306 differential vectors (default run) + 56 unit tests,
+**Status: PASS — 2,316 differential vectors (default run) + 56 unit tests,
 byte-identical with the Go reference** (1 documented divergence, see below).
 Stress runs with 500 vectors/op exceed 4,300 vectors, all green.
 **MAINNET REPLAY: PASS — 29/29 blocks reproduce the live chain's BLIDs
@@ -102,6 +102,7 @@ Toolchain notes (Windows):
 | DVM | dvm_parse/dvm_run/dvm_rnd (9 contracts: math, store, branch, strings, random, nested, loops, assets) | byte-identical parse (functions/lines/params), execution (returns, gas compute+storage, ops, lines, store commits), deterministic RNG |
 | Address/hash builtins | bech32_raw/bech32_string/bech32_valid/hexdecode | byte-identical bech32 encode/decode + compressed-key validation (caught: invalid keys must yield "", not an address); hexdecode parity |
 | graviton state | grav_put/grav_delete/grav_get (4 trees, 200+ key stress) | byte-identical merkle root hashes after every mutation; empty-child hash = blake2s(2‖zeros), empty tree = inner(zerosHash²) |
+| Real-chain tx | tx_extract_verify (10 live block blobs, genesis→7.5M) | miner tx extracted on both sides: txid, statement (publickeys/CLn/CRn/C/D/roothash/fees), proof bytes identical; verify verdicts AGREE |
 | Errors | malformed deserialize (short/long/non-QR) | both sides reject identically |
 
 ## Reference quirks discovered (and replicated)
