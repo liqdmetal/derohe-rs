@@ -2516,6 +2516,38 @@ func handle(id int, op string, raw json.RawMessage) {
 		}
 		ok(id, out)
 
+	case "dvm_uses_signer":
+		code, err := str(in, "code")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		sc, _, perr := dvm.ParseSmartContract(code)
+		if perr != nil {
+			ok(id, map[string]interface{}{"ok": false, "err": perr.Error()})
+			return
+		}
+		// K0 Fix B2 mirror: true iff any function line token == SIGNER
+		// (case-insensitive, matching the DVM's dispatch).
+		uses := false
+		for _, fn := range sc.Functions {
+			for _, line := range fn.Lines {
+				for _, tok := range line {
+					if strings.EqualFold(tok, "SIGNER") {
+						uses = true
+						break
+					}
+				}
+				if uses {
+					break
+				}
+			}
+			if uses {
+				break
+			}
+		}
+		ok(id, map[string]interface{}{"ok": true, "uses_signer": uses})
+
 	case "dvm_rnd":
 		scidS, _ := str(in, "scid")
 		blidS, _ := str(in, "blid")
@@ -2878,6 +2910,159 @@ func handle(id int, op string, raw json.RawMessage) {
 		}
 		bl.MiniBlocks = mbls
 		blockchain.OracleProcessMinerTx(&bl, genesis, bt, fees, height)
+		h, _ := bt.Hash()
+		ok(id, map[string]interface{}{"hash": hex.EncodeToString(h[:])})
+
+	// ---- Phase 14: process_transaction (balance moves) --------------------
+
+	case "chain_tx":
+		// apply process_transaction on the shared "B" tree:
+		// 1. register each ring member (from JSON publickeylist) with a zero
+		//    balance if not present
+		// 2. build the tx, serialize+deserialize roundtrip (fills the in-memory
+		//    Publickeylist_pointers — Go process_transaction reads them)
+		// 3. process_transaction -> return tree root + fees
+		height, _ := strconv.ParseUint(optionalStr(in, "height", "0"), 10, 64)
+		bt, err := gravTree("B")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		// register ring keys from JSON
+		if payRaw, ok := in["payloads"]; ok {
+			var payList []json.RawMessage
+			if err := json.Unmarshal(payRaw, &payList); err != nil {
+				fail(id, err)
+				return
+			}
+			for _, pj := range payList {
+				var pin map[string]json.RawMessage
+				if err := json.Unmarshal(pj, &pin); err != nil {
+					fail(id, err)
+					return
+				}
+				stmtIn, ok := pin["statement"]
+				if !ok {
+					continue
+				}
+				var sim map[string]json.RawMessage
+				if err := json.Unmarshal(stmtIn, &sim); err != nil {
+					fail(id, err)
+					return
+				}
+				pkRaw, ok := sim["publickeylist"]
+				if !ok {
+					continue
+				}
+				var pkList []string
+				if err := json.Unmarshal(pkRaw, &pkList); err != nil {
+					fail(id, err)
+					return
+				}
+				for _, pkS := range pkList {
+					pkB, err := unhex(pkS)
+					if err != nil || len(pkB) != 33 {
+						fail(id, fmt.Errorf("bad pk"))
+						return
+					}
+					if _, err := bt.Get(pkB); err != nil {
+						var acckey crypto.Point
+						if err := acckey.DecodeCompressed(pkB); err != nil {
+							fail(id, err)
+							return
+						}
+						zerobalance := crypto.ConstructElGamal(acckey.G1(), crypto.ElGamal_BASE_G)
+						nb := crypto.NonceBalance{NonceHeight: 0, Balance: zerobalance}
+						bt.Put(pkB, nb.Serialize())
+					}
+				}
+			}
+		}
+		tx, err := txFromIn(in)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		// roundtrip to fill Publickeylist_pointers (identical bytes both sides)
+		ser := tx.Serialize()
+		var tx2 transaction.Transaction
+		if err := tx2.Deserialize(ser); err != nil {
+			fail(id, err)
+			return
+		}
+		fees := blockchain.OracleProcessTx(map[crypto.Hash]*graviton.Tree{}, tx2, bt, height)
+		h, _ := bt.Hash()
+		ok(id, map[string]interface{}{"hash": hex.EncodeToString(h[:]), "fees": fmt.Sprintf("%d", fees)})
+
+	case "chain_block":
+		// apply a full block: miner_tx (with hash-aligned miniblocks) then
+		// the block's txs sequentially on the shared "B" tree
+		height, _ := strconv.ParseUint(optionalStr(in, "height", "0"), 10, 64)
+		fees, _ := strconv.ParseUint(optionalStr(in, "fees", "0"), 10, 64)
+		bt, err := gravTree("B")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		minerAddr, err := unhex(must(in, "miner_address"))
+		if err != nil || len(minerAddr) != 33 {
+			fail(id, fmt.Errorf("bad miner_address"))
+			return
+		}
+		var bl block.Block
+		bl.Miner_TX.Version = 1
+		bl.Miner_TX.TransactionType = transaction.COINBASE
+		copy(bl.Miner_TX.MinerAddress[:], minerAddr)
+		bl.Miner_TX.Value = 0
+		var mbls []block.MiniBlock
+		if raw, ok := in["miniblocks"]; ok {
+			json.Unmarshal(raw, &mbls)
+		}
+		bl.MiniBlocks = mbls
+		blockchain.OracleProcessMinerTx(&bl, false, bt, fees, height)
+		// then the txs (same JSON as chain_tx)
+		if payRaw, ok := in["payloads"]; ok {
+			var payList []json.RawMessage
+			json.Unmarshal(payRaw, &payList)
+			for _, pj := range payList {
+				var pin map[string]json.RawMessage
+				json.Unmarshal(pj, &pin)
+				stmtIn, _ := pin["statement"]
+				var sim map[string]json.RawMessage
+				json.Unmarshal(stmtIn, &sim)
+				pkRaw, _ := sim["publickeylist"]
+				var pkList []string
+				json.Unmarshal(pkRaw, &pkList)
+				for _, pkS := range pkList {
+					pkB, _ := unhex(pkS)
+					if _, err := bt.Get(pkB); err != nil {
+						var acckey crypto.Point
+						if err := acckey.DecodeCompressed(pkB); err == nil {
+							zerobalance := crypto.ConstructElGamal(acckey.G1(), crypto.ElGamal_BASE_G)
+							nb := crypto.NonceBalance{NonceHeight: 0, Balance: zerobalance}
+							bt.Put(pkB, nb.Serialize())
+						}
+					}
+				}
+				var single = map[string]json.RawMessage{}
+				for k, v := range in {
+					single[k] = v
+				}
+				single["payloads"] = json.RawMessage(fmt.Sprintf("[%s]", string(pj)))
+				tx, err := txFromIn(single)
+				if err != nil {
+					fail(id, err)
+					return
+				}
+				ser := tx.Serialize()
+				var tx2 transaction.Transaction
+				if err := tx2.Deserialize(ser); err != nil {
+					fail(id, err)
+					return
+				}
+				blockchain.OracleProcessTx(map[crypto.Hash]*graviton.Tree{}, tx2, bt, height)
+			}
+		}
 		h, _ := bt.Hash()
 		ok(id, map[string]interface{}{"hash": hex.EncodeToString(h[:])})
 

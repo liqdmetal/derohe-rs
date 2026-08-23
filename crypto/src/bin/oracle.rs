@@ -1042,6 +1042,32 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     Err(e) => Ok(json!({"ok": false, "err": e})),
                 }
             }
+            "dvm_uses_signer" => {
+                use dero_crypto::dvm;
+                let code = s("code")?;
+                match dvm::parse_smart_contract(&code) {
+                    Ok(sc) => {
+                        // Mirror of Go dvm.ContractUsesSigner (K0 Fix B2):
+                        // true iff any function line token equals "SIGNER"
+                        // (case-insensitive, matching DVM dispatch).
+                        let mut uses_signer = false;
+                        for f in sc.functions.values() {
+                            for line in f.lines.values() {
+                                for tok in line {
+                                    if tok.eq_ignore_ascii_case("SIGNER") {
+                                        uses_signer = true;
+                                        break;
+                                    }
+                                }
+                                if uses_signer { break; }
+                            }
+                            if uses_signer { break; }
+                        }
+                        Ok(json!({"ok": true, "uses_signer": uses_signer}))
+                    }
+                    Err(e) => Ok(json!({"ok": false, "err": e})),
+                }
+            }
             "dvm_rnd" => {
                 use dero_crypto::dvm::{initialize_rnd, Rnd};
                 let hx = |k: &str| -> [u8; 32] {
@@ -1291,6 +1317,106 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     }
                 }
                 chain::process_miner_transaction(&addr, miner_value, &mbls, genesis, bt, fees, height);
+                Ok(json!({"hash": hex::encode(bt.hash())}))
+            }
+            "chain_tx" => {
+                use dero_crypto::chain;
+                use dero_crypto::elgamal::ElGamal;
+                use dero_crypto::hash_to_point::base_g;
+                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let bt = grav_tree_mut("B");
+                // register ring keys from JSON
+                if let Some(payv) = inp.get("payloads") {
+                    if let Ok(pays) = serde_json::from_str::<Vec<serde_json::Value>>(&payv.to_string()) {
+                        for pj in pays {
+                            let stmt = &pj["statement"];
+                            if let Some(pks) = stmt.get("publickeylist").and_then(|x| x.as_array()) {
+                                for pksv in pks {
+                                    let pk_b = hex_decode(&pksv.as_str().unwrap_or(""))?;
+                                    if bt.get(&pk_b).is_none() {
+                                        let pk = dero_crypto::curve::decode_compressed(&pk_b).map_err(|e| e)?;
+                                        let zb = ElGamal::new(pk, base_g());
+                                        let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+                                        bt.put(&pk_b, &nb.serialize());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut tx = tx_from_in(inp)?;
+                // roundtrip to fill pointers
+                let ser = tx.serialize(3);
+                tx = dero_crypto::transaction::Transaction::deserialize(&ser, 3)?;
+                let fees = chain::process_transaction(
+                    &mut std::collections::HashMap::new(), &tx, bt, height,
+                );
+                Ok(json!({"hash": hex::encode(bt.hash()), "fees": fees.to_string()}))
+            }
+            "chain_block" => {
+                use dero_crypto::chain;
+                use dero_crypto::elgamal::ElGamal;
+                use dero_crypto::hash_to_point::base_g;
+                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let fees: u64 = s_key(inp, "fees").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let bt = grav_tree_mut("B");
+                // miner_tx part
+                let miner_addr = hex_decode(&s("miner_address")?)?;
+                let mut addr = [0u8; 33];
+                addr.copy_from_slice(&miner_addr);
+                let mut mbls = Vec::new();
+                if let Some(v) = inp.get("miniblocks") {
+                    if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&v.to_string()) {
+                        for m in arr {
+                            let kh = hex::decode(m.get("KeyHash").and_then(|x| x.as_str()).unwrap_or("")).unwrap_or_default();
+                            let mut kh32 = [0u8; 32];
+                            let n = kh.len().min(32);
+                            kh32[..n].copy_from_slice(&kh[..n]);
+                            mbls.push(dero_crypto::block::MiniBlock {
+                                version: m.get("Version").and_then(|x| x.as_u64()).unwrap_or(1) as u8,
+                                high_diff: false,
+                                final_block: m.get("Final").and_then(|x| x.as_bool()).unwrap_or(false),
+                                past_count: m.get("PastCount").and_then(|x| x.as_u64()).unwrap_or(1) as u8,
+                                timestamp: m.get("Timestamp").and_then(|x| x.as_u64()).unwrap_or(0) as u16,
+                                height: m.get("Height").and_then(|x| x.as_u64()).unwrap_or(0),
+                                past: [m.get("Past").and_then(|x| x.as_array()).and_then(|a| a.get(0)).and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                                       m.get("Past").and_then(|x| x.as_array()).and_then(|a| a.get(1)).and_then(|x| x.as_u64()).unwrap_or(0) as u32],
+                                key_hash: kh32,
+                                flags: m.get("Flags").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                                nonce: [0, 0, 0],
+                            });
+                        }
+                    }
+                }
+                chain::process_miner_transaction(&addr, 0, &mbls, false, bt, fees, height);
+                // then the txs
+                if let Some(payv) = inp.get("payloads") {
+                    if let Ok(pays) = serde_json::from_str::<Vec<serde_json::Value>>(&payv.to_string()) {
+                        for pj in pays {
+                            let stmt = &pj["statement"];
+                            if let Some(pks) = stmt.get("publickeylist").and_then(|x| x.as_array()) {
+                                for pksv in pks {
+                                    let pk_b = hex_decode(&pksv.as_str().unwrap_or(""))?;
+                                    if bt.get(&pk_b).is_none() {
+                                        let pk = dero_crypto::curve::decode_compressed(&pk_b).map_err(|e| e)?;
+                                        let zb = ElGamal::new(pk, base_g());
+                                        let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+                                        bt.put(&pk_b, &nb.serialize());
+                                    }
+                                }
+                            }
+                            // rebuild single-payload tx JSON
+                            let mut single = inp.clone();
+                            single.insert("payloads".into(), serde_json::json!([pj]));
+                            let mut tx = tx_from_in(&single)?;
+                            let ser = tx.serialize(3);
+                            tx = dero_crypto::transaction::Transaction::deserialize(&ser, 3)?;
+                            chain::process_transaction(
+                                &mut std::collections::HashMap::new(), &tx, bt, height,
+                            );
+                        }
+                    }
+                }
                 Ok(json!({"hash": hex::encode(bt.hash())}))
             }
             "bp_debug" => {
