@@ -102,6 +102,18 @@ fn s_key(inp: &serde_json::Map<String, Value>, k: &str) -> Result<String, String
     inp.get(k).and_then(|v| v.as_str()).map(|x| x.to_string()).ok_or_else(|| format!("missing key {}", k))
 }
 
+/// Shared persistent graviton trees across requests (single static).
+static mut GRAV_TREES: Option<std::collections::HashMap<String, dero_crypto::graviton::Tree>> = None;
+fn grav_tree_mut(name: &str) -> &'static mut dero_crypto::graviton::Tree {
+    unsafe {
+        let map = GRAV_TREES.get_or_insert_with(|| std::collections::HashMap::new());
+        if !map.contains_key(name) {
+            map.insert(name.to_string(), dero_crypto::graviton::Tree::new(name));
+        }
+        map.get_mut(name).unwrap()
+    }
+}
+
 /// Parse an RFC3339 (Nano) timestamp into (unix_secs, nanos) — mirrors Go
 /// time.Parse(time.RFC3339Nano) for the Z/offset forms the harness uses.
 fn parse_rfc3339(s: &str) -> Result<(i64, u32), String> {
@@ -1204,34 +1216,82 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "grav_put" | "grav_delete" | "grav_get" => {
                 use dero_crypto::graviton::Tree;
                 let tname = s("tree")?;
-                // persistent trees across requests (process-level)
-                static mut GRAV: Option<std::collections::HashMap<String, Tree>> = None;
-                let trees = unsafe {
-                    GRAV.get_or_insert_with(|| std::collections::HashMap::new())
-                };
-                if !trees.contains_key(&tname) {
-                    trees.insert(tname.clone(), Tree::new(&tname));
-                }
+                let tree = grav_tree_mut(&tname);
                 let key = hex_decode(&s("key")?)?;
                 match op {
                     "grav_put" => {
                         let val = hex_decode(&s("value")?)?;
-                        trees.get_mut(&tname).unwrap().put(&key, &val);
-                        let h = trees.get(&tname).unwrap().hash();
-                        Ok(json!({"hash": hex::encode(h)}))
+                        tree.put(&key, &val);
+                        Ok(json!({"hash": hex::encode(tree.hash())}))
                     }
                     "grav_delete" => {
-                        trees.get_mut(&tname).unwrap().delete(&key);
-                        let h = trees.get(&tname).unwrap().hash();
-                        Ok(json!({"hash": hex::encode(h)}))
+                        tree.delete(&key);
+                        Ok(json!({"hash": hex::encode(tree.hash())}))
                     }
                     _ => {
-                        match trees.get(&tname).unwrap().get(&key) {
+                        match tree.get(&key) {
                             Some(v) => Ok(json!({"found": true, "value": hex::encode(v)})),
                             None => Ok(json!({"found": false})),
                         }
                     }
                 }
+            }
+            "grav_register" => {
+                use dero_crypto::elgamal::ElGamal;
+                use dero_crypto::hash_to_point::base_g;
+                let tname = s("tree")?;
+                let addr = hex_decode(&s("address")?)?;
+                let pk = dero_crypto::curve::decode_compressed(&addr).map_err(|e| e)?;
+                // Go ConstructElGamal(pk, ElGamal_BASE_G): Left = pk, Right = G
+                let zerobalance = ElGamal::new(pk, base_g());
+                let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zerobalance };
+                grav_tree_mut(&tname).put(&addr, &nb.serialize());
+                Ok(json!({"registered": true}))
+            }
+            "chain_reward" => {
+                use dero_crypto::chain;
+                let height: u64 = s("height")?.parse().map_err(|_| "bad height".to_string())?;
+                Ok(json!({"reward": chain::calc_block_reward(height).to_string()}))
+            }
+            "chain_miner_tx" => {
+                use dero_crypto::chain;
+                use dero_crypto::graviton::Tree;
+                let genesis = s_key(inp, "genesis").map(|v| v == "true").unwrap_or(false);
+                let fees: u64 = s_key(inp, "fees").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let miner_addr = hex_decode(&s("miner_address")?)?;
+                let mut addr = [0u8; 33];
+                addr.copy_from_slice(&miner_addr);
+                let miner_value: u64 = s_key(inp, "miner_value").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                // persistent "B" tree (shared with grav_register/grav_put)
+                let bt = grav_tree_mut("B");
+                // miniblocks from JSON
+                let mut mbls = Vec::new();
+                if let Some(v) = inp.get("miniblocks") {
+                    if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&v.to_string()) {
+                        for m in arr {
+                            let kh = hex::decode(m.get("KeyHash").and_then(|x| x.as_str()).unwrap_or("")).unwrap_or_default();
+                            let mut kh32 = [0u8; 32];
+                            let n = kh.len().min(32);
+                            kh32[..n].copy_from_slice(&kh[..n]);
+                            mbls.push(dero_crypto::block::MiniBlock {
+                                version: m.get("Version").and_then(|x| x.as_u64()).unwrap_or(1) as u8,
+                                high_diff: false,
+                                final_block: m.get("Final").and_then(|x| x.as_bool()).unwrap_or(false),
+                                past_count: m.get("PastCount").and_then(|x| x.as_u64()).unwrap_or(1) as u8,
+                                timestamp: m.get("Timestamp").and_then(|x| x.as_u64()).unwrap_or(0) as u16,
+                                height: m.get("Height").and_then(|x| x.as_u64()).unwrap_or(0),
+                                past: [m.get("Past").and_then(|x| x.as_array()).and_then(|a| a.get(0)).and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                                       m.get("Past").and_then(|x| x.as_array()).and_then(|a| a.get(1)).and_then(|x| x.as_u64()).unwrap_or(0) as u32],
+                                key_hash: kh32,
+                                flags: m.get("Flags").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                                nonce: [0, 0, 0],
+                            });
+                        }
+                    }
+                }
+                chain::process_miner_transaction(&addr, miner_value, &mbls, genesis, bt, fees, height);
+                Ok(json!({"hash": hex::encode(bt.hash())}))
             }
             "bp_debug" => {
                 let st = statement_from_in(inp)?;

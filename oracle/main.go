@@ -30,6 +30,7 @@ import (
 	"github.com/deroproject/derohe/astrobwt"
 	"github.com/deroproject/derohe/astrobwt/astrobwtv3"
 	"github.com/deroproject/derohe/block"
+	"github.com/deroproject/derohe/blockchain"
 	"github.com/deroproject/derohe/cryptography/bn256"
 	"github.com/deroproject/derohe/cryptography/crypto"
 	"github.com/deroproject/derohe/dvm"
@@ -2813,6 +2814,72 @@ func handle(id int, op string, raw json.RawMessage) {
 			return
 		}
 		ok(id, map[string]interface{}{"found": true, "value": hex.EncodeToString(v)})
+
+	// ---- Phase 13: chain state transitions (block -> balance tree) -------
+
+	case "grav_register":
+		// register an address with a zero balance: ElGamal{Left: pk, Right: G}
+		tree, err := gravTree(must(in, "tree"))
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		addr, err := unhex(must(in, "address"))
+		if err != nil || len(addr) != 33 {
+			fail(id, fmt.Errorf("bad address"))
+			return
+		}
+		var acckey crypto.Point
+		if err := acckey.DecodeCompressed(addr); err != nil {
+			fail(id, err)
+			return
+		}
+		zerobalance := crypto.ConstructElGamal(acckey.G1(), crypto.ElGamal_BASE_G)
+		nb := crypto.NonceBalance{NonceHeight: 0, Balance: zerobalance}
+		tree.Put(addr, nb.Serialize())
+		ok(id, map[string]interface{}{"registered": true})
+
+	case "chain_reward":
+		height, err := strconv.ParseUint(must(in, "height"), 10, 64)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		ok(id, map[string]interface{}{"reward": fmt.Sprintf("%d", blockchain.OracleCalcBlockReward(height))})
+
+	case "chain_miner_tx":
+		// process_miner_transaction on a JSON-specified block, using the
+		// persistent graviton tree "B" (pre-populated by grav_put so the
+		// miniblock miners are registered under their hash-aligned keys).
+		genesis, _ := strconv.ParseBool(optionalStr(in, "genesis", "false"))
+		fees, _ := strconv.ParseUint(optionalStr(in, "fees", "0"), 10, 64)
+		height, _ := strconv.ParseUint(optionalStr(in, "height", "0"), 10, 64)
+		minerAddr, err := unhex(must(in, "miner_address"))
+		if err != nil || len(minerAddr) != 33 {
+			fail(id, fmt.Errorf("bad miner_address"))
+			return
+		}
+		minerValue, _ := strconv.ParseUint(optionalStr(in, "miner_value", "0"), 10, 64)
+		bt, err := gravTree("B")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		// build the block
+		var bl block.Block
+		bl.Miner_TX.Version = 1
+		bl.Miner_TX.TransactionType = transaction.COINBASE
+		copy(bl.Miner_TX.MinerAddress[:], minerAddr)
+		bl.Miner_TX.Value = minerValue
+		// miniblocks from JSON
+		var mbls []block.MiniBlock
+		if raw, ok := in["miniblocks"]; ok {
+			json.Unmarshal(raw, &mbls)
+		}
+		bl.MiniBlocks = mbls
+		blockchain.OracleProcessMinerTx(&bl, genesis, bt, fees, height)
+		h, _ := bt.Hash()
+		ok(id, map[string]interface{}{"hash": hex.EncodeToString(h[:])})
 
 	default:
 		fail(id, fmt.Errorf("unknown op %q", op))

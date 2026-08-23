@@ -64,14 +64,14 @@ pub fn inner_hash(lhash: &[u8], rhash: &[u8]) -> [u8; 32] {
 /// The bit-trie node.
 #[derive(Clone, Debug)]
 pub enum Node {
-    Leaf { keyhash: [u8; 32], value: Vec<u8> },
+    Leaf { keyhash: [u8; 32], key: Vec<u8>, value: Vec<u8> },
     Inner { bit: u8, left: Option<Box<Node>>, right: Option<Box<Node>> },
 }
 
 impl Node {
     pub fn hash(&self) -> [u8; 32] {
         match self {
-            Node::Leaf { keyhash, value } => {
+            Node::Leaf { keyhash, value, .. } => {
                 let hval = grav_hash(value);
                 leaf_hash(keyhash, &hval)
             }
@@ -125,23 +125,23 @@ fn is_bit_set(keyhash: &[u8; 32], index: u8) -> bool {
 
 /// Insert a leaf into an INNER node (Go inner.Insert), replicating the exact
 /// branch/overwrite/new-inner behavior. `in.bit` is the bit this node tests.
-fn inner_insert(node: &mut Node, keyhash: &[u8; 32], value: &[u8]) {
+fn inner_insert(node: &mut Node, key: &[u8], keyhash: &[u8; 32], value: &[u8]) {
     let (bit, l, r) = match node {
         Node::Inner { bit, left, right } => (*bit, left, right),
         _ => unreachable!("inner_insert on non-inner"),
     };
     if is_bit_set(keyhash, bit) {
-        insert_child(r, bit, keyhash, value);
+        insert_child(r, bit, key, keyhash, value);
     } else {
-        insert_child(l, bit, keyhash, value);
+        insert_child(l, bit, key, keyhash, value);
     }
 }
 
-fn insert_child(child: &mut Option<Box<Node>>, bit: u8, keyhash: &[u8; 32], value: &[u8]) {
+fn insert_child(child: &mut Option<Box<Node>>, bit: u8, key: &[u8], keyhash: &[u8; 32], value: &[u8]) {
     match child {
         None => {
             // dead end: place the leaf
-            *child = Some(Box::new(Node::Leaf { keyhash: *keyhash, value: value.to_vec() }));
+            *child = Some(Box::new(Node::Leaf { keyhash: *keyhash, key: key.to_vec(), value: value.to_vec() }));
         }
         Some(node) => {
             let is_leaf = matches!(node.as_ref(), Node::Leaf { .. });
@@ -159,18 +159,18 @@ fn insert_child(child: &mut Option<Box<Node>>, bit: u8, keyhash: &[u8; 32], valu
             if is_leaf {
                 // split: new inner at bit+1, insert existing leaf first,
                 // then the new leaf (Go: Insert(store, tmp, n))
-                let (oldkh, oldv) = match node.as_ref() {
-                    Node::Leaf { keyhash, value } => (*keyhash, value.clone()),
+                let (oldkh, oldk, oldv) = match node.as_ref() {
+                    Node::Leaf { keyhash, key, value } => (*keyhash, key.clone(), value.clone()),
                     _ => unreachable!(),
                 };
                 let mut tmp = Box::new(Node::Inner { bit: bit + 1, left: None, right: None });
-                inner_insert(&mut tmp, &oldkh, &oldv);
-                inner_insert(&mut tmp, keyhash, value);
+                inner_insert(&mut tmp, &oldk, &oldkh, &oldv);
+                inner_insert(&mut tmp, key, keyhash, value);
                 *node = tmp;
                 return;
             }
             // inner node: recurse
-            inner_insert(node, keyhash, value);
+            inner_insert(node, key, keyhash, value);
         }
     }
 }
@@ -178,7 +178,7 @@ fn insert_child(child: &mut Option<Box<Node>>, bit: u8, keyhash: &[u8; 32], valu
 /// Recursively fetch a value by keyhash (Go inner.Get).
 fn node_get(node: &Node, keyhash: &[u8; 32]) -> Option<Vec<u8>> {
     match node {
-        Node::Leaf { keyhash: lkh, value } => {
+        Node::Leaf { keyhash: lkh, value, .. } => {
             if lkh == keyhash {
                 Some(value.clone())
             } else {
@@ -200,6 +200,37 @@ fn node_get(node: &Node, keyhash: &[u8; 32]) -> Option<Vec<u8>> {
         }
     }
 }
+
+/// Fetch (key, value) by keyhash, descending at most `max_bit` bits.
+/// Mirrors Go inner.GetKeyValue with valid_bit_count = max_bit: when the
+/// trie depth reaches max_bit we return the leaf found there.
+fn node_get_kv_prefix(node: &Node, keyhash: &[u8; 32], max_bit: u8) -> Option<(Vec<u8>, Vec<u8>)> {
+    match node {
+        Node::Leaf { key, value, .. } => Some((key.clone(), value.clone())),
+        Node::Inner { bit, left, right } => {
+            if *bit >= max_bit {
+                // Go: used_bit_count > valid_bit_count → return current node
+                // (a leaf here). Inner at depth == max_bit with both children
+                // sharing the prefix is ambiguous; Go's dead-end logic returns
+                // ErrNotFound. We return None for non-leaf.
+                return None;
+            }
+            if is_bit_set(keyhash, *bit) {
+                match right {
+                    Some(r) => node_get_kv_prefix(r, keyhash, max_bit),
+                    None => None,
+                }
+            } else {
+                match left {
+                    Some(l) => node_get_kv_prefix(l, keyhash, max_bit),
+                    None => None,
+                }
+            }
+        }
+    }
+}
+
+/// Recursively fetch a value by keyhash (Go inner.Get).
 
 /// Go inner.Delete: returns (empty, changed). Replicates the single-leaf
 /// child collapse (isOnlyChildleaf).
@@ -316,7 +347,20 @@ impl Tree {
             panic!("value is longer then max allowed value size");
         }
         let kh = sum(key);
-        inner_insert(&mut self.root, &kh, value);
+        inner_insert(&mut self.root, key, &kh, value);
+    }
+
+    /// Go GetKeyValueFromHash: look up by KEYHASH, return (key, value).
+    /// Only the first `keyhash.len()*8` bits are walked (Go valid_bit_count =
+    /// len*8) — so a 16-byte keyhash descends 128 bits and returns the leaf
+    /// sharing that prefix, without checking the full hash.
+    pub fn get_key_value_from_hash(&self, keyhash: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+        if keyhash.is_empty() || keyhash.len() > 32 {
+            return None;
+        }
+        let mut h = [0u8; 32];
+        h[..keyhash.len()].copy_from_slice(&keyhash);
+        node_get_kv_prefix(&self.root, &h, (keyhash.len() * 8) as u8)
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {

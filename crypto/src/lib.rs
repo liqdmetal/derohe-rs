@@ -10,6 +10,7 @@ pub mod astrobwt_v3;
 pub mod balance_serdes;
 pub mod block;
 pub mod bulletproof;
+pub mod chain;
 pub mod curve;
 pub mod dvm;
 pub mod elgamal;

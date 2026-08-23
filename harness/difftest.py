@@ -1137,13 +1137,91 @@ End Function""",
     go_o = run_oracle(GO_ORACLE, phase_o)
     rust_o = run_oracle(RUST_ORACLE, phase_o)
 
+    # ---- Phase P: chain state transitions ----------------------------------
+    # Reward formula across heights + process_miner_transaction on SYNTHETIC
+    # blocks whose miniblock KeyHashes are blake2s(addr)[:16] (so the
+    # prefix-lookup finds the registered miner). Both sides pre-register all
+    # addresses on the shared "B" tree via grav_put, then process.
+    phase_p = []
+    iid = 8000000
+
+    def add_p(op, inp):
+        nonlocal iid
+        phase_p.append({"id": iid, "op": op, "in": inp})
+        iid += 1
+
+    for h in (0, 1, 100, 100000, 1000000, 6999999, 7000000, 7000001, 14000000):
+        add_p("chain_reward", {"height": str(h)})
+
+    import hashlib
+
+    def blake2s16(b):
+        # first 16 bytes of the 32-byte BLAKE2s-256 digest (DERO convention)
+        return hashlib.blake2s(b, digest_size=32).digest()[:16]
+
+    # generate VALID compressed points: x where y²=x³+3 has a sqrt mod p
+    P256 = 21888242871839275222246405745257275088696311157297823662689037894645226208583
+    SQRT_EXP = (P256 + 1) // 4
+
+    def gen_addr(x):
+        # find the first valid on-curve x >= the seed
+        while True:
+            xx = x % P256
+            y2 = (pow(xx, 3, P256) + 3) % P256
+            if pow(y2, (P256 - 1) // 2, P256) == 1:  # quadratic residue
+                # y = sqrt; flag = 0 (even y) or 1 (odd y)
+                y = pow(y2, SQRT_EXP, P256)
+                flag = 1 if y & 1 else 0
+                return ("%064x" % xx) + ("%02x" % flag)
+            x += 1
+
+    rng3 = random.Random(0xC14A1E5E)
+    # genesis case FIRST (empty tree): process_miner_transaction registers
+    gaddr = gen_addr(rng3.randrange(0, 2**254))
+    add_p("chain_miner_tx", {
+        "miner_address": gaddr, "miner_value": "500000000",
+        "miniblocks": [], "genesis": "true", "height": "0", "fees": "0",
+    })
+
+    for blk in range(4):
+        n_mbl = 2 + blk  # 2..5 miniblocks
+        addrs = [gen_addr(rng3.randrange(0, 2**254)) for _ in range(n_mbl)]
+        miner_addr = addrs[0]
+        # register ALL addresses on the shared "B" tree with zero balances
+        # (a zero NonceBalance = ElGamal{Left: pk, Right: G})
+        for a in addrs:
+            add_p("grav_register", {"tree": "B", "address": a})
+        # build miniblocks with hash-aligned KeyHash (blake2s(addr)[:16])
+        # — Go's MiniBlock.KeyHash is [32]byte, so send the full 32 bytes
+        mbls = []
+        for i, a in enumerate(addrs):
+            kh16 = blake2s16(bytes.fromhex(a))
+            kh32 = kh16 + b"\x00" * 16
+            mbls.append({
+                "Version": 1, "Final": (i == 0), "PastCount": 1,
+                "Timestamp": 0, "Height": 0, "Past": [0, 0],
+                "KeyHash": kh32.hex(), "Flags": 0,
+            })
+        height = 100 + blk * 1000
+        add_p("chain_miner_tx", {
+            "miner_address": miner_addr,
+            "miner_value": "0",
+            "miniblocks": mbls,
+            "genesis": "false",
+            "height": str(height),
+            "fees": str(1000 + blk),
+        })
+
+    go_p = run_oracle(GO_ORACLE, phase_p)
+    rust_p = run_oracle(RUST_ORACLE, phase_p)
+
     # ---- compare -----------------------------------------------------------
     failures = []
     per_op = {}
 
     def check(resp_go, resp_rust):
         op = None
-        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o):
+        for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p):
             if r["id"] == resp_go["id"]:
                 op = r["op"]
                 break
@@ -1157,7 +1235,7 @@ End Function""",
             failures.append((op, resp_go["id"], f"expected x>=p divergence, got go={g_ok} rust={r_ok}"))
             return
         if g_ok != r_ok:
-            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o) if r["id"] == resp_go["id"]), None)
+            req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p) if r["id"] == resp_go["id"]), None)
             failures.append(
                 (op, resp_go["id"], f"ok mismatch: go={g_ok} rust={r_ok} "
                  f"go_err={resp_go.get('err')} rust_err={resp_rust.get('err')} req={json.dumps(req)}")
@@ -1169,7 +1247,7 @@ End Function""",
             go_out = {k: v for k, v in resp_go["out"].items() if not k.startswith("snap_")}
             rust_out = {k: v for k, v in resp_rust["out"].items() if not k.startswith("snap_")}
             if go_out != rust_out:
-                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o) if r["id"] == resp_go["id"]), None)
+                req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p) if r["id"] == resp_go["id"]), None)
                 failures.append(
                     (op, resp_go["id"], f"out mismatch:\n  go:   {json.dumps(go_out)}\n  rust: {json.dumps(rust_out)}\n  req:  {json.dumps(req)}")
                 )
@@ -1205,6 +1283,8 @@ End Function""",
         check(go_n[r["id"]], rust_n[r["id"]])
     for r in phase_o:
         check(go_o[r["id"]], rust_o[r["id"]])
+    for r in phase_p:
+        check(go_p[r["id"]], rust_p[r["id"]])
 
     # real-chain tx verify: verdicts must AGREE (accept-path agreement)
     for cid, label in ((r["id"], r["id"]) for r in phase_o):
@@ -1259,7 +1339,7 @@ End Function""",
         else:
             failures.append(("proof_cross_verify", cid, f"missing cross-verify response go={g} rust={r}"))
 
-    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n) + len(phase_o)
+    total = len(phase_a) + len(phase_b) + len(phase_c) + len(phase_d) + len(phase_e) + len(phase_f) + len(phase_g) + len(phase_h) + len(phase_i) + len(phase_j) + len(phase_k) + len(phase_l) + len(phase_m) + len(phase_n) + len(phase_o) + len(phase_p)
     print(f"\n=== differential results: {total} vectors ===")
     for op, cnt in sorted(per_op.items()):
         print(f"  {op:32s} {cnt:4d}")
