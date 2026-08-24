@@ -2011,7 +2011,18 @@ func handle(id int, op string, raw json.RawMessage) {
 		if !hasCln {
 			realisticStatement(s, w, burn)
 		}
-		verified, _ := crypto.OracleVerifyProof(crypto.ZEROHASH, scid, scidIdx, s, proof, txid, burn)
+		verified := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Go reference PANICS on corrupted/malformed proofs
+					// ("Faulty or invalid proof"). The oracle maps that to a
+					// clean REJECT (verified=false), matching the Rust side.
+					verified = false
+				}
+			}()
+			verified, _ = crypto.OracleVerifyProof(crypto.ZEROHASH, scid, scidIdx, s, proof, txid, burn)
+		}()
 		ok(id, map[string]interface{}{"verified": verified})
 
 	// ---- Phase 5: balance serialization (NonceBalance) --------------------

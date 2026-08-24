@@ -832,38 +832,47 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 }))
             }
             "proof_verify" => {
-                let mut st = statement_from_in(inp)?;
-                let burn: u64 = s("burn")?.parse().map_err(|e| format!("burn: {}", e))?;
-                // when the full statement (cln/crn/c/d) is supplied, use it
-                // verbatim (valid-tx accept testing)
-                let has_cln = inp.contains_key("cln");
-                if has_cln {
-                    let plist = |k: &str| -> Result<Vec<G1Projective>, String> {
-                        let arr = inp.get(k).and_then(|v| v.as_array()).ok_or(format!("missing {}", k))?;
-                        arr.iter().map(|v| {
-                            let h = v.as_str().ok_or("hex")?;
-                            let b = hex::decode(h).map_err(|e| e.to_string())?;
-                            decode_compressed(&b)
-                        }).collect()
-                    };
-                    st.0.cln = plist("cln")?;
-                    st.0.crn = plist("crn")?;
-                    st.0.c = plist("c")?;
-                    st.0.d = {
-                        let b = hex::decode(&s("d")?).map_err(|e| e.to_string())?;
-                        decode_compressed(&b)?
-                    };
-                } else {
-                    realistic_statement(&mut st.0, &st.1, burn);
+                // corrupted statements can make decode_compressed fail
+                // ("not a square mod P") — map to a clean REJECT, matching
+                // the Go reference's panic->reject mapping.
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<serde_json::Value, String> {
+                    let mut st = statement_from_in(inp)?;
+                    let burn: u64 = s("burn")?.parse().map_err(|e| format!("burn: {}", e))?;
+                    // when the full statement (cln/crn/c/d) is supplied, use it
+                    // verbatim (valid-tx accept testing)
+                    let has_cln = inp.contains_key("cln");
+                    if has_cln {
+                        let plist = |k: &str| -> Result<Vec<G1Projective>, String> {
+                            let arr = inp.get(k).and_then(|v| v.as_array()).ok_or(format!("missing {}", k))?;
+                            arr.iter().map(|v| {
+                                let h = v.as_str().ok_or("hex")?;
+                                let b = hex::decode(h).map_err(|e| e.to_string())?;
+                                decode_compressed(&b)
+                            }).collect()
+                        };
+                        st.0.cln = plist("cln")?;
+                        st.0.crn = plist("crn")?;
+                        st.0.c = plist("c")?;
+                        st.0.d = {
+                            let b = hex::decode(&s("d")?).map_err(|e| e.to_string())?;
+                            decode_compressed(&b)?
+                        };
+                    } else {
+                        realistic_statement(&mut st.0, &st.1, burn);
+                    }
+                    let proof_b = hex_decode(&s("proof")?)?;
+                    let scid: [u8; 32] = hex_decode(&s("scid")?)?.try_into().map_err(|_| "scid must be 32 bytes")?;
+                    let scid_index: i32 = s("scid_index")?.parse().map_err(|e| format!("scid_index: {}", e))?;
+                    let txid: [u8; 32] = hex_decode(&s("txid")?)?.try_into().map_err(|_| "txid must be 32 bytes")?;
+                    // deserialize: parse the proof struct from the byte stream
+                    let proof = deserialize_proof(&proof_b, st.0.publickeylist.len() / 2)?;
+                    let verified = bulletproof::verify(&scid, scid_index, &st.0, &proof, &txid, burn);
+                    Ok(json!({"verified": verified}))
+                }));
+                match res {
+                    Ok(Ok(v)) => Ok(v),
+                    _ => Ok(json!({"verified": false})),
                 }
-                let proof_b = hex_decode(&s("proof")?)?;
-                let scid: [u8; 32] = hex_decode(&s("scid")?)?.try_into().map_err(|_| "scid must be 32 bytes")?;
-                let scid_index: i32 = s("scid_index")?.parse().map_err(|e| format!("scid_index: {}", e))?;
-                let txid: [u8; 32] = hex_decode(&s("txid")?)?.try_into().map_err(|_| "txid must be 32 bytes")?;
-                // deserialize: parse the proof struct from the byte stream
-                let proof = deserialize_proof(&proof_b, st.0.publickeylist.len() / 2)?;
-                let verified = bulletproof::verify(&scid, scid_index, &st.0, &proof, &txid, burn);
-                Ok(json!({"verified": verified}))
             }
             "noncebalance_marshal" => {
                 let nh: u64 = s("nonceheight")?.parse().map_err(|e| format!("nonceheight: {}", e))?;
