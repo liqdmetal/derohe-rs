@@ -125,19 +125,24 @@ fn elgamal_zero(key: &G1Projective) -> ElGamal {
 
 /// process_transaction — apply a tx's balance changes to the state trees.
 /// Returns the fees the tx pays. `changed` holds the SC data trees (keyed by
-/// SCID); the main balance tree is passed separately.
+/// SCID); the main balance tree is passed separately. `simulator` enables
+/// the testnet/simulator 100M registration bonus (Go: `!IsMainnet() ||
+/// chain.simulator`).
 pub fn process_transaction(
     changed: &mut std::collections::HashMap<[u8; 32], Tree>,
     tx: &Transaction,
     balance_tree: &mut Tree,
     height: u64,
+    simulator: bool,
 ) -> u64 {
     match tx.tx_type {
         TX_REGISTRATION => {
             // register the address with a zero (or mainnet-early) balance
             let key = decode_compressed(&tx.miner_address).expect("registration address invalid");
             let mut balance = elgamal_zero(&key);
-            if height < 144000 {
+            if simulator {
+                balance = balance.plus(&be32(100000000)); // testnet/simulator bonus
+            } else if height < 144000 {
                 balance = balance.plus(&be32(200)); // early mainnet bonus
             }
             let nb = crate::balance_serdes::NonceBalance { nonce_height: 0, balance };

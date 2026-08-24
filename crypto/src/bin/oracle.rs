@@ -965,9 +965,9 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 }))
             }
             "chain_block_apply" => {
-                // apply a REAL block blob's miner tx to the persistent "B"
-                // tree (rewards to integrator + miniblock miners) and return
-                // the new root. Genesis flag seeds the premine.
+                // apply a REAL block blob: ALL txs (balance moves) then the
+                // miner tx (rewards) — the exact Add_Complete_Block order.
+                // Returns the new balance-tree root.
                 use dero_crypto::chain;
                 use dero_crypto::elgamal::ElGamal;
                 use dero_crypto::hash_to_point::base_g;
@@ -987,9 +987,23 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         }
                     }
                 }
+                // 1) the block's non-coinbase txs (balance moves + fees)
+                // the block blob's txs are NOT embedded — the block header
+                // only hashes them. The harness passes tx blobs separately.
+                // For miner-only blocks (no tx_hashes), this is a no-op.
+                // 2) the miner tx (rewards)
+                let mut fees = 0u64;
+                if let Some(txblobs) = inp.get("txs").and_then(|v| v.as_array()) {
+                    for tb in txblobs {
+                        let hexb = tb.as_str().ok_or("tx hex")?;
+                        let raw = hex_decode(hexb)?;
+                        let tx = dero_crypto::transaction::Transaction::deserialize(&raw, 3)?;
+                        fees += chain::process_transaction(&mut std::collections::HashMap::new(), &tx, bt, height, true);
+                    }
+                }
                 chain::process_miner_transaction(
                     &bl.miner_tx.miner_address, bl.miner_tx.value,
-                    &bl.mini_blocks, genesis, bt, 0, height,
+                    &bl.mini_blocks, genesis, bt, fees, height,
                 );
                 Ok(json!({"hash": hex::encode(bt.hash())}))
             }
@@ -1470,7 +1484,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let ser = tx.serialize(3);
                 tx = dero_crypto::transaction::Transaction::deserialize(&ser, 3)?;
                 let fees = chain::process_transaction(
-                    &mut std::collections::HashMap::new(), &tx, bt, height,
+                    &mut std::collections::HashMap::new(), &tx, bt, height, false,
                 );
                 Ok(json!({"hash": hex::encode(bt.hash()), "fees": fees.to_string()}))
             }
@@ -1533,7 +1547,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                             let ser = tx.serialize(3);
                             tx = dero_crypto::transaction::Transaction::deserialize(&ser, 3)?;
                             chain::process_transaction(
-                                &mut std::collections::HashMap::new(), &tx, bt, height,
+                                &mut std::collections::HashMap::new(), &tx, bt, height, false,
                             );
                         }
                     }
