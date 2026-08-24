@@ -618,7 +618,23 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
         inp.get(k)
             .and_then(|v| v.as_str())
             .map(|x| x.to_string())
-            .ok_or_else(|| format!("missing key {}", k))
+            .ok_or_else(|| format!("missing key {k}"))
+    };
+    // u64p: parse a required uint64 field in one line (condensed + typed error)
+    let u64p = |k: &str| -> Result<u64, String> {
+        inp.get(k)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("missing key {k}"))?
+            .parse::<u64>()
+            .map_err(|_| format!("{k} not a uint64"))
+    };
+    // boolp: strict boolean — rejects anything but "true"/"false"
+    let boolp = |k: &str| -> Result<bool, String> {
+        match s(k)?.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            other => Err(format!("{k} must be true/false, got {other:?}")),
+        }
     };
 
     let result: Result<Value, String> = (|| {
@@ -1326,10 +1342,16 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 // is passed explicitly so the differential vectors can
                 // sweep the boundary.
                 use dero_crypto::transaction::*;
-                let height: u64 = s("height")?.parse().map_err(|_| "bad height".to_string())?;
-                let txtype: u64 = s("txtype")?.parse().map_err(|_| "bad txtype".to_string())?;
-                let ringsize: u64 = s("ringsize")?.parse().map_err(|_| "bad ringsize".to_string())?;
-                let floor: u64 = s("floor")?.parse().map_err(|_| "bad floor".to_string())?;
+                let height = u64p("height")?;
+                let txtype = u64p("txtype")?;
+                let ringsize = u64p("ringsize")?;
+                let floor = u64p("floor")?;
+                if txtype > TX_SC {
+                    return Err(format!("unknown txtype {txtype}"));
+                }
+                if ringsize == 0 || ringsize > 128 {
+                    return Err(format!("ringsize {ringsize} out of range 1..=128"));
+                }
                 let reject = height >= floor
                     && ringsize < 4
                     && (txtype == TX_NORMAL || txtype == TX_BURN);
@@ -1341,11 +1363,17 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 //   install: ring-2 SC_INSTALL of a no-SIGNER contract,
                 //            post-fork -> reject
                 //   call:    ring-2 SC_CALL to a NoSigner-bit contract -> reject
-                let height: u64 = s("height")?.parse().map_err(|_| "bad height".to_string())?;
-                let ringsize: u64 = s("ringsize")?.parse().map_err(|_| "bad ringsize".to_string())?;
-                let floor: u64 = s("floor")?.parse().map_err(|_| "bad floor".to_string())?;
-                let uses_signer = s("uses_signer")? == "true";
-                let no_signer = s("no_signer")? == "true";
+                let height = u64p("height")?;
+                let ringsize = u64p("ringsize")?;
+                let floor = u64p("floor")?;
+                if ringsize == 0 || ringsize > 128 {
+                    return Err(format!("ringsize {ringsize} out of range 1..=128"));
+                }
+                if floor == 0 {
+                    return Err("floor must be > 0".into());
+                }
+                let uses_signer = boolp("uses_signer")?;
+                let no_signer = boolp("no_signer")?;
                 let install_reject = height >= floor && ringsize == 2 && !uses_signer;
                 let call_reject = ringsize == 2 && no_signer;
                 Ok(json!({"install_reject": install_reject, "call_reject": call_reject}))

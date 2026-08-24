@@ -913,6 +913,24 @@ func must(in map[string]json.RawMessage, k string) string {
 	return s
 }
 
+// parseUint: condensed uint64-field parse (error-checked once per field).
+func parseUint(in map[string]json.RawMessage, k string) (uint64, error) {
+	return strconv.ParseUint(must(in, k), 10, 64)
+}
+
+// strictBool: boolean field that rejects anything but "true"/"false"
+// (silently coercing garbage to false is an error-check gap).
+func strictBool(in map[string]json.RawMessage, k string) (bool, error) {
+	switch optionalStr(in, k, "") {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true/false", k)
+	}
+}
+
 func handle(id int, op string, raw json.RawMessage) {
 	var in map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -2926,29 +2944,37 @@ func handle(id int, op string, raw json.RawMessage) {
 		// exported function; the fork height is overridable per-request so
 		// the differential vectors can sweep the boundary (config default:
 		// mainnet 7.6M / testnet 0).
-		height, err := strconv.ParseUint(must(in, "height"), 10, 64)
+		height, err := parseUint(in, "height")
 		if err != nil {
 			fail(id, err)
 			return
 		}
-		ts, err := strconv.ParseUint(must(in, "txtype"), 10, 64)
+		ts, err := parseUint(in, "txtype")
 		if err != nil {
 			fail(id, err)
 			return
 		}
-		rs, err := strconv.ParseUint(must(in, "ringsize"), 10, 64)
+		rs, err := parseUint(in, "ringsize")
 		if err != nil {
 			fail(id, err)
+			return
+		}
+		if ts > 5 { // max TransactionType = SC_TX
+			fail(id, fmt.Errorf("unknown txtype %d", ts))
+			return
+		}
+		if rs == 0 || rs > 128 {
+			fail(id, fmt.Errorf("ringsize %d out of range 1..=128", rs))
 			return
 		}
 		if f := optionalStr(in, "floor", ""); f != "" {
-			floor, ferr := strconv.ParseInt(f, 10, 64)
+			floor, ferr := parseUint(in, "floor")
 			if ferr != nil {
 				fail(id, ferr)
 				return
 			}
 			orig := globals.Config.K0_MIN_RING4_HEIGHT
-			globals.Config.K0_MIN_RING4_HEIGHT = floor
+			globals.Config.K0_MIN_RING4_HEIGHT = int64(floor)
 			rej := blockchain.K0RingSizeFloorReject(height, transaction.TransactionType(ts), rs)
 			globals.Config.K0_MIN_RING4_HEIGHT = orig
 			ok(id, map[string]interface{}{"reject": rej})
@@ -2962,24 +2988,40 @@ func handle(id int, op string, raw json.RawMessage) {
 		//   call:    ring-2 SC_CALL to a NoSigner-bit contract -> reject
 		// Pure decision functions (OracleK0B2InstallReject / CallReject) —
 		// the differential compares the verdicts against the Rust mirror.
-		height, err := strconv.ParseUint(must(in, "height"), 10, 64)
+		height, err := parseUint(in, "height")
 		if err != nil {
 			fail(id, err)
 			return
 		}
-		ringsize, err := strconv.ParseUint(must(in, "ringsize"), 10, 64)
+		ringsize, err := parseUint(in, "ringsize")
 		if err != nil {
 			fail(id, err)
 			return
 		}
 		floor := uint64(7600000)
 		if f := optionalStr(in, "floor", ""); f != "" {
-			if fl, ferr := strconv.ParseUint(f, 10, 64); ferr == nil {
+			if fl, ferr := parseUint(in, "floor"); ferr == nil {
 				floor = fl
 			}
 		}
-		usesSigner := optionalStr(in, "uses_signer", "") == "true"
-		noSigner := optionalStr(in, "no_signer", "") == "true"
+		if ringsize == 0 || ringsize > 128 {
+			fail(id, fmt.Errorf("ringsize %d out of range 1..=128", ringsize))
+			return
+		}
+		if floor == 0 {
+			fail(id, fmt.Errorf("floor must be > 0"))
+			return
+		}
+		usesSigner, err := strictBool(in, "uses_signer")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		noSigner, err := strictBool(in, "no_signer")
+		if err != nil {
+			fail(id, err)
+			return
+		}
 		ok(id, map[string]interface{}{
 			"install_reject": blockchain.OracleK0B2InstallReject(height, floor, ringsize, usesSigner),
 			"call_reject":    blockchain.OracleK0B2CallReject(ringsize, noSigner),

@@ -1431,6 +1431,16 @@ End Function""",
                 # it; a no-SIGNER contract gets it post-fork at install
                 ns = (not us) and (h >= 7_600_000)
                 add_u(h, rs, us, ns)
+    # Negative cases: the error-checked inputs must be REJECTED identically
+    # by both implementations (bad bool, ring out of range).
+    phase_u.append({"id": iid, "op": "b2_reject", "in": {
+        "height": "8000000", "ringsize": "2", "uses_signer": "maybe", "no_signer": "false", "floor": "7600000"}}); iid += 1
+    phase_u.append({"id": iid, "op": "b2_reject", "in": {
+        "height": "8000000", "ringsize": "0", "uses_signer": "false", "no_signer": "true", "floor": "7600000"}}); iid += 1
+    phase_u.append({"id": iid, "op": "b2_reject", "in": {
+        "height": "8000000", "ringsize": "129", "uses_signer": "false", "no_signer": "true", "floor": "7600000"}}); iid += 1
+    phase_u.append({"id": iid, "op": "k0_floor", "in": {
+        "height": "8000000", "txtype": "99", "ringsize": "2", "floor": "7600000"}}); iid += 1
 
     go_u = run_oracle(GO_ORACLE, phase_u)
     rust_u = run_oracle(RUST_ORACLE, phase_u)
