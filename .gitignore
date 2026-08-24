@@ -11,3 +11,4 @@ __pycache__/
 # harness debug request dumps (regenerated deterministically)
 harness/phase_*_requests.json
 harness/phase_*_extra.json
+bin/*.exe

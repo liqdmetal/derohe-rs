@@ -890,6 +890,18 @@ func buildValidTx(in map[string]json.RawMessage, ring []*bn256.G1, sk *big.Int, 
 	tx.TransactionType = transaction.NORMAL
 	tx.Height = 0
 	tx.Payloads = []transaction.AssetPayload{ap}
+	// blid + height passthrough (for chain submission: the tx must reference
+	// a real block so the mempool/chain accept it)
+	if blidS, err := str(in, "blid"); err == nil {
+		if blidB, err := unhex(blidS); err == nil && len(blidB) == 32 {
+			copy(tx.BLID[:], blidB)
+		}
+	}
+	if hS, err := str(in, "txheight"); err == nil {
+		if hv, err := strconv.ParseUint(hS, 10, 64); err == nil {
+			tx.Height = hv
+		}
+	}
 	txid := tx.GetHash()
 
 	proof := crypto.OracleGenerateProof(scid, 0, s, w, u, txid, burn)

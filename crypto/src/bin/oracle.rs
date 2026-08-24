@@ -374,11 +374,24 @@ fn build_valid_tx(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::t
             scid,
             burn_value: burn,
             rpc_type: 0,
-            rpc_payload,
-            statement: st,
+            rpc_payload: vec![0u8; PAYLOAD_LIMIT],
+            statement: st.clone(),
             proof: None,
         }],
     };
+    // blid + height passthrough (chain submission)
+    if let Some(blid_s) = inp.get("blid").and_then(|v| v.as_str()) {
+        if let Ok(bb) = hex::decode(blid_s) {
+            if bb.len() == 32 {
+                tx.blid.copy_from_slice(&bb);
+            }
+        }
+    }
+    if let Some(h_s) = inp.get("txheight").and_then(|v| v.as_str()) {
+        if let Ok(hv) = h_s.parse::<u64>() {
+            tx.height = hv;
+        }
+    }
     let tx_hash = tx.get_hash(3);
     let proof = bulletproof::generate_proof(&scid, 0, &tx.payloads[0].statement, &w, &u, &tx_hash, burn, &rand);
     tx.payloads[0].proof = Some(proof);
