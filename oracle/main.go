@@ -2956,6 +2956,35 @@ func handle(id int, op string, raw json.RawMessage) {
 		}
 		ok(id, map[string]interface{}{"reject": blockchain.K0RingSizeFloorReject(height, transaction.TransactionType(ts), rs)})
 
+	case "b2_reject":
+		// K0 Fix B2 decision rules (Go reference):
+		//   install: ring-2 SC_INSTALL of a no-SIGNER contract, post-fork -> reject
+		//   call:    ring-2 SC_CALL to a NoSigner-bit contract -> reject
+		// Pure decision functions (OracleK0B2InstallReject / CallReject) —
+		// the differential compares the verdicts against the Rust mirror.
+		height, err := strconv.ParseUint(must(in, "height"), 10, 64)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		ringsize, err := strconv.ParseUint(must(in, "ringsize"), 10, 64)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		floor := uint64(7600000)
+		if f := optionalStr(in, "floor", ""); f != "" {
+			if fl, ferr := strconv.ParseUint(f, 10, 64); ferr == nil {
+				floor = fl
+			}
+		}
+		usesSigner := optionalStr(in, "uses_signer", "") == "true"
+		noSigner := optionalStr(in, "no_signer", "") == "true"
+		ok(id, map[string]interface{}{
+			"install_reject": blockchain.OracleK0B2InstallReject(height, floor, ringsize, usesSigner),
+			"call_reject":    blockchain.OracleK0B2CallReject(ringsize, noSigner),
+		})
+
 	case "chain_miner_tx":
 		// process_miner_transaction on a JSON-specified block, using the
 		// persistent graviton tree "B" (pre-populated by grav_put so the

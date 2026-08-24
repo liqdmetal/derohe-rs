@@ -1335,6 +1335,21 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     && (txtype == TX_NORMAL || txtype == TX_BURN);
                 Ok(json!({"reject": reject}))
             }
+            "b2_reject" => {
+                // K0 Fix B2 decision rules (mirror of Go
+                // OracleK0B2InstallReject / OracleK0B2CallReject):
+                //   install: ring-2 SC_INSTALL of a no-SIGNER contract,
+                //            post-fork -> reject
+                //   call:    ring-2 SC_CALL to a NoSigner-bit contract -> reject
+                let height: u64 = s("height")?.parse().map_err(|_| "bad height".to_string())?;
+                let ringsize: u64 = s("ringsize")?.parse().map_err(|_| "bad ringsize".to_string())?;
+                let floor: u64 = s("floor")?.parse().map_err(|_| "bad floor".to_string())?;
+                let uses_signer = s("uses_signer")? == "true";
+                let no_signer = s("no_signer")? == "true";
+                let install_reject = height >= floor && ringsize == 2 && !uses_signer;
+                let call_reject = ringsize == 2 && no_signer;
+                Ok(json!({"install_reject": install_reject, "call_reject": call_reject}))
+            }
             "chain_miner_tx" => {
                 use dero_crypto::chain;
                 use dero_crypto::graviton::Tree;
