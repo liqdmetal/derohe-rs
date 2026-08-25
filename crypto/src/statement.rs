@@ -124,6 +124,18 @@ impl Statement {
         };
         Ok((st, pos))
     }
+
+    /// Bytes-per-publickey of this statement's pointers. Go derives this from
+    /// the wire (`Bytes_per_publickey`); mainnet txs use 3, wallet txs may
+    /// use 2. Computed from the pointer length + the ring size when the
+    /// ring power is known from the statement's C-vector length.
+    pub fn bpp(&self) -> u8 {
+        let ring = self.c.len();
+        if ring == 0 || self.pointers.is_empty() {
+            return 3; // fallback: mainnet default
+        }
+        (self.pointers.len() / ring) as u8
+    }
 }
 
 /// Scalar -> 32-byte big-endian (for oracle test scaffolding).

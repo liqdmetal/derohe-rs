@@ -1,0 +1,18 @@
+[package]
+name = "dero-wallet-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C-FFI wallet SDK for DERO — exposes key generation, address conversion, transaction/block deserialization, and proof verification via extern \"C\" for iOS (Swift) and Android (JNI)."
+
+[lib]
+name = "dero_wallet"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+dero-crypto = { path = "../crypto" }
+# rand for keypair generation
+rand = "0.8"
+# Re-exported ark crates (used directly in FFI for key generation)
+ark-bn254 = "0.5"
+ark-ec = "0.5"
+ark-ff = "0.5"

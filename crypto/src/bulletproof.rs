@@ -588,16 +588,21 @@ pub fn deserialize(b: &[u8], m: usize) -> Result<Proof, String> {
         pos += n;
         Ok(s)
     };
-    let pt = |bytes: &[u8]| -> Result<G1Projective, String> { decode_compressed(bytes) };
+    let pt = |bytes: &[u8], label: &str| -> Result<G1Projective, String> {
+        match decode_compressed(bytes) {
+            Ok(p) => Ok(p),
+            Err(e) => Err(format!("{}: {} bytes={}", label, e, hex::encode(bytes))),
+        }
+    };
     let sc = |bytes: &[u8]| -> Result<[u8; 32], String> {
         let mut a = [0u8; 32];
         a.copy_from_slice(bytes);
         Ok(a)
     };
-    let ba = pt(take(33)?)?;
-    let bs = pt(take(33)?)?;
-    let a = pt(take(33)?)?;
-    let b = pt(take(33)?)?;
+    let ba = pt(take(33)?, "BA")?;
+    let bs = pt(take(33)?, "BS")?;
+    let a = pt(take(33)?, "A")?;
+    let b = pt(take(33)?, "B")?;
     let mut clng = Vec::with_capacity(m);
     let mut crng = Vec::with_capacity(m);
     let mut c_0g = Vec::with_capacity(m);
@@ -606,25 +611,25 @@ pub fn deserialize(b: &[u8], m: usize) -> Result<Proof, String> {
     let mut gg = Vec::with_capacity(m);
     let mut c_xg = Vec::with_capacity(m);
     let mut y_xg = Vec::with_capacity(m);
-    for _ in 0..m {
-        clng.push(pt(take(33)?)?);
-        crng.push(pt(take(33)?)?);
-        c_0g.push(pt(take(33)?)?);
-        dg.push(pt(take(33)?)?);
-        y_0g.push(pt(take(33)?)?);
-        gg.push(pt(take(33)?)?);
-        c_xg.push(pt(take(33)?)?);
-        y_xg.push(pt(take(33)?)?);
+    for i in 0..m {
+        clng.push(pt(take(33)?, &format!("CLnG[{}]", i))?);
+        crng.push(pt(take(33)?, &format!("CRnG[{}]", i))?);
+        c_0g.push(pt(take(33)?, &format!("C_0G[{}]", i))?);
+        dg.push(pt(take(33)?, &format!("DG[{}]", i))?);
+        y_0g.push(pt(take(33)?, &format!("y_0G[{}]", i))?);
+        gg.push(pt(take(33)?, &format!("gG[{}]", i))?);
+        c_xg.push(pt(take(33)?, &format!("C_XG[{}]", i))?);
+        y_xg.push(pt(take(33)?, &format!("y_XG[{}]", i))?);
     }
-    let u = pt(take(33)?)?;
+    let u = pt(take(33)?, "u")?;
     let mut f_raw = Vec::with_capacity(2 * m);
     for _ in 0..2 * m {
         f_raw.push(sc(take(32)?)?);
     }
     let f = FieldVector::new(f_raw);
     let z_a = fr_from_be_bytes(take(32)?);
-    let t_1 = pt(take(33)?)?;
-    let t_2 = pt(take(33)?)?;
+    let t_1 = pt(take(33)?, "T_1")?;
+    let t_2 = pt(take(33)?, "T_2")?;
     let that = fr_from_be_bytes(take(32)?);
     let mu = fr_from_be_bytes(take(32)?);
     let c = fr_from_be_bytes(take(32)?);
@@ -636,9 +641,9 @@ pub fn deserialize(b: &[u8], m: usize) -> Result<Proof, String> {
     let ip_b = sc(take(32)?)?;
     let mut ls = Vec::with_capacity(7);
     let mut rs = Vec::with_capacity(7);
-    for _ in 0..7 {
-        ls.push(pt(take(33)?)?);
-        rs.push(pt(take(33)?)?);
+    for i in 0..7 {
+        ls.push(pt(take(33)?, &format!("L[{}]", i))?);
+        rs.push(pt(take(33)?, &format!("R[{}]", i))?);
     }
     Ok(Proof {
         ba, bs, a, b, clng, crng, c_0g, dg, y_0g, gg, c_xg, y_xg, u,

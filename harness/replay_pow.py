@@ -61,12 +61,20 @@ def mini_block_in(m, height):
 
 
 def main():
-    heights = [500000, 1000000, 2000000, 3000000, 4000000,
-               5000000, 6000000, 7000000, 7511600]
+    # DENSE coverage: scattered checkpoints + 100-block windows at epoch points
+    # PoW is per-block (no sequential dependency), so we can test any height
+    height_set = set([0, 1, 2, 3, 4, 5, 10, 20, 50, 100, 500, 1000, 5000,
+                      50000, 500000, 1000000, 2000000, 3000000, 4000000,
+                      5000000, 6000000, 7000000, 7504640, 7504641, 7504642])
+    # add 100-block dense windows (sampled: every 10th block to keep runtime sane)
+    for w_start in [0, 100000, 1000000, 5000000, 7400000, 7500000, 7510000]:
+        height_set |= set(range(w_start, w_start + 100, 10))
+    heights = sorted(height_set)
     fails = []
     ok_miniblocks = 0
     ok_final = 0
 
+    heights = sorted(height_set)
     for h in heights:
         res = rpc("DERO.GetBlock", {"height": h})
         r = res.get("result")
@@ -117,7 +125,7 @@ def main():
                 ok_final += 1
             print(f"  {tag} mbl HighDiff={m.get('HighDiff')} pow_valid={valid} go_agree={agree}")
             if not agree:
-                fails.append((h, "go/rust disagree on pow or check"))
+                fails.append((h, "pow", "go/rust disagree on pow or check"))
 
     print()
     print(f"=== chain PoW: {ok_miniblocks} miniblocks valid, {ok_final} final valid ===")

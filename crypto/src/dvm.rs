@@ -805,7 +805,7 @@ impl DVMInterpreter {
             let var = match data_type {
                 Vtype::Uint64 => Variable::new_uint64(v, 0),
                 Vtype::String => Variable::new_string(v, ""),
-                _ => panic!("Unhandled data_type"),
+                _ => return Err(format!("DIM: unhandled data_type {:?}", data_type)),
             };
             self.locals.insert(v.clone(), var);
         }
@@ -831,7 +831,7 @@ impl DVMInterpreter {
                 let v = expr_value.as_string().ok_or("type mismatch")?;
                 self.locals.get_mut(&line[0]).unwrap().value_string = v;
             }
-            _ => panic!("Unhandled data_type"),
+            _ => return Err(format!("LET: unhandled data_type {:?}", self.locals.get(&line[0]).map(|v| v.vtype).unwrap_or(Vtype::Invalid))),
         }
         Ok(())
     }
@@ -1459,10 +1459,15 @@ fn builtin_load(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, St
     let dkey = DataKey { scid: dvm.state.chain_inputs.scid, balance: false, key: keyv };
     let mut found = 0u64;
     let result = dvm.state.store.load(&dkey, &mut found);
+    if found == 0 {
+        // Missing key: return 0 (matches Go DVM default for absent keys)
+        return Ok(ExprValue::Uint64(0));
+    }
     Ok(match result.vtype {
         Vtype::Uint64 => ExprValue::Uint64(result.value_uint64),
         Vtype::String => ExprValue::String(result.value_string),
-        _ => panic!("Unhandled data_type"),
+        Vtype::Invalid => ExprValue::Uint64(0), // default for uninitialized
+        _ => return Err(format!("load: unhandled vtype {:?}", result.vtype)),
     })
 }
 

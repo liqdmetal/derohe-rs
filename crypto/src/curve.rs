@@ -95,25 +95,38 @@ pub fn decode_compressed(b: &[u8]) -> Result<G1Projective, String> {
         return Err(format!("wrong encoded point size: {}", b.len()));
     }
     let flag = b[32];
-    if flag > 1 {
-        return Err(format!("invalid flag byte: {}", flag));
-    }
-    let x_bi = be32_to_bigint(&b[..32]);
-    let x = Fq::from_bigint(x_bi).ok_or("x >= field prime")?;
-    // y = (x^3 + 3)^((p+1)/4); verify y^2 == x^3 + 3
-    let rhs = x.square() * x + Fq::from(3u32);
+    // Go xToY: xi = SetBytes(xb[0:32]) as a RAW big.Int (NOT reduced mod p);
+    // t = xi^3 + B computed with UNREDUCED big-int arithmetic; then
+    // ModSqrt(t mod p). For xi >= p this yields a different point than the
+    // field-reduced interpretation — replicate exactly.
+    let xi = BigUint::from_bytes_be(&b[..32]);
+    let p_bi = p_as_biguint();
+    let xi3 = (&xi * &xi * &xi) % &p_bi;
+    let t = (xi3 + BigUint::from(3u32)) % &p_bi;
+    // sqrt mod p via exponent (p+1)/4 — same as Go ModSqrt for p ≡ 3 mod 4,
+    // but Go normalizes the result to EVEN parity. We compute the raw root,
+    // then parity-adjust below.
+    let t_fq = Fq::from_le_bytes_mod_order(&t.to_bytes_le());
     let exp = bigint_from_hex("0c19139cb84c680a6e14116da060561765e05aa45a1c72a34f082305b61f3f52");
-    let mut y = rhs.pow(&exp);
-    if y.square() != rhs {
+    let y_root = t_fq.pow(&exp);
+    if y_root.square() != t_fq {
         return Err("not a square mod P".into());
     }
-    // select root by flag: 0x00 = smaller root
-    let p_bi = p_as_biguint();
-    let y_bi = bigint_to_biguint(y.into_bigint());
-    let y_is_smaller = &y_bi * 2u32 < p_bi;
-    if (flag == 0x00 && !y_is_smaller) || (flag == 0x01 && y_is_smaller) {
-        y = -y;
-    }
+    // y1 = Go ModSqrt result (raw (p+1)/4 power, NO parity normalization);
+    // y2 = p - y1.
+    let y1 = y_root;
+    let y2 = -y1;
+    // Go Decompress: smaller := y1.Cmp(y2) < 0  (i.e. 2*y1 < p)
+    let y1_smaller = bigint_to_biguint(y1.into_bigint()) * 2u32 < p_bi;
+    let y = match flag {
+        // 0x00: if smaller use y1 else y2
+        0x00 => if y1_smaller { y1 } else { y2 },
+        // 0x01: if smaller use y2 else y1
+        0x01 => if y1_smaller { y2 } else { y1 },
+        // fallthrough: return y1 regardless of flag
+        _ => y1,
+    };
+    let x = Fq::from_le_bytes_mod_order(&xi.to_bytes_le());
     Ok(G1Affine::new_unchecked(x, y).into())
 }
 
@@ -122,6 +135,15 @@ mod tests {
     use super::*;
     use ark_ec::PrimeGroup;
     use ark_ff::fields::AdditiveGroup;
+
+
+    #[test]
+    fn decode_x_ge_p() {
+        // the wallet's L[1] point from the live simnode transfer
+        let pt = hex::decode("cdb52d75499c15fe868089364a86b3e2cbce099fa1ebf51d49c40338f5fd0016de").unwrap();
+        let r = decode_compressed(&pt);
+        assert!(r.is_ok(), "decode failed: {:?}", r.err());
+    }
 
     #[test]
     fn generator_roundtrip() {

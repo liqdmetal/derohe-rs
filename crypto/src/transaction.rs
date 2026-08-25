@@ -278,10 +278,13 @@ impl Transaction {
         if tx_type == TX_BURN || tx_type == TX_NORMAL || tx_type == TX_SC {
             for p in tx.payloads.iter_mut() {
                 // ring size from the statement's publickey pointers:
-                // pointers_len = ring_size * bpp, so m = log2(ring_size)
-                let ring = if p.statement.pointers.is_empty() { 0 } else { p.statement.pointers.len() / bpp as usize };
+                // pointers_len = ring_size * bpp. bpp comes from the
+                // STATEMENT's own bytes (Go: Bytes_per_publickey), NOT a
+                // caller-supplied constant — wallet txs use bpp=2.
+                let st_bpp = p.statement.bpp();
+                let ring = if p.statement.pointers.is_empty() { 0 } else { p.statement.pointers.len() / st_bpp as usize };
                 let m = if ring > 0 { (ring as f64).log2() as usize } else { 0 };
-                let proof = bulletproof::deserialize(&buf[pos..], m).map_err(|e| format!("proof: {}", e))?;
+                let proof = bulletproof::deserialize(&buf[pos..], m).map_err(|e| format!("proof: {e}"))?;
                 pos += bulletproof::serialized_len(&proof);
                 p.proof = Some(proof);
             }

@@ -100,9 +100,12 @@ pub fn process_miner_transaction(
             continue;
         }
         let kh16 = &mbl.key_hash[..16];
-        let (key_compressed, balance_serialized) = balance_tree
+        let (key_compressed, balance_serialized) = match balance_tree
             .get_key_value_from_hash(kh16)
-            .unwrap_or_else(|| panic!("miniblock miner not found"));
+        {
+            Some(v) => v,
+            None => continue, // miner not registered yet — skip (matches Go)
+        };
         let mut nb = crate::balance_serdes::NonceBalance::deserialize(&balance_serialized)
             .expect("bad balance");
         nb.balance = nb.balance.plus(&be32(share));
@@ -174,8 +177,8 @@ fn process_payload(    tree: &mut Tree,
     parity: bool,
     height: u64,
 ) {
-    let bpp = BPP_MAINNET as usize;
     let st = &payload.statement;
+    let bpp = st.bpp() as usize;
     let ring = st.pointers.len() / bpp;
     for i in 0..ring {
         let key_pointer = &st.pointers[i * bpp..(i + 1) * bpp];

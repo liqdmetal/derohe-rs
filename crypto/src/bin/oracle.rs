@@ -516,24 +516,29 @@ fn tx_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::trans
 /// m = number of CLnG entries (ring pairs count / 2).
 fn deserialize_proof(b: &[u8], m: usize) -> Result<bulletproof::Proof, String> {
     let mut pos = 0usize;
-    let mut take = |n: usize| -> Result<&[u8], String> {
+    let mut take = |n: usize, label: &str| -> Result<&[u8], String> {
         if pos + n > b.len() {
-            return Err("proof buffer too short".into());
+            return Err(format!("proof buffer too short at {} ({})", label, pos));
         }
         let s = &b[pos..pos + n];
         pos += n;
         Ok(s)
     };
-    let pt = |bytes: &[u8]| -> Result<G1Projective, String> { decode_compressed(bytes) };
+    let pt = |bytes: &[u8], label: &str| -> Result<G1Projective, String> {
+        match decode_compressed(bytes) {
+            Ok(p) => Ok(p),
+            Err(e) => Err(format!("{}: {}", label, e)),
+        }
+    };
     let sc = |bytes: &[u8]| -> Result<[u8; 32], String> {
         let mut a = [0u8; 32];
         a.copy_from_slice(bytes);
         Ok(a)
     };
-    let ba = pt(take(33)?)?;
-    let bs = pt(take(33)?)?;
-    let a = pt(take(33)?)?;
-    let b = pt(take(33)?)?;
+    let ba = pt(take(33, "BA")?, "BA")?;
+    let bs = pt(take(33, "BS")?, "BS")?;
+    let a = pt(take(33, "A")?, "A")?;
+    let b = pt(take(33, "B")?, "B")?;
     let mut clng = Vec::with_capacity(m);
     let mut crng = Vec::with_capacity(m);
     let mut c_0g = Vec::with_capacity(m);
@@ -542,40 +547,40 @@ fn deserialize_proof(b: &[u8], m: usize) -> Result<bulletproof::Proof, String> {
     let mut gg = Vec::with_capacity(m);
     let mut c_xg = Vec::with_capacity(m);
     let mut y_xg = Vec::with_capacity(m);
-    for _ in 0..m {
-        clng.push(pt(take(33)?)?);
-        crng.push(pt(take(33)?)?);
-        c_0g.push(pt(take(33)?)?);
-        dg.push(pt(take(33)?)?);
-        y_0g.push(pt(take(33)?)?);
-        gg.push(pt(take(33)?)?);
-        c_xg.push(pt(take(33)?)?);
-        y_xg.push(pt(take(33)?)?);
+    for i in 0..m {
+        clng.push(pt(take(33, "CLnG")?, &format!("CLnG[{}]", i))?);
+        crng.push(pt(take(33, "CRnG")?, &format!("CRnG[{}]", i))?);
+        c_0g.push(pt(take(33, "C_0G")?, &format!("C_0G[{}]", i))?);
+        dg.push(pt(take(33, "DG")?, &format!("DG[{}]", i))?);
+        y_0g.push(pt(take(33, "y_0G")?, &format!("y_0G[{}]", i))?);
+        gg.push(pt(take(33, "gG")?, &format!("gG[{}]", i))?);
+        c_xg.push(pt(take(33, "C_XG")?, &format!("C_XG[{}]", i))?);
+        y_xg.push(pt(take(33, "y_XG")?, &format!("y_XG[{}]", i))?);
     }
-    let u = pt(take(33)?)?;
+    let u = pt(take(33, "u")?, "u")?;
     let mut f_raw = Vec::with_capacity(2 * m);
     for _ in 0..2 * m {
-        f_raw.push(sc(take(32)?)?);
+        f_raw.push(sc(take(32, "f")?)?);
     }
     let f = FieldVector::new(f_raw);
-    let z_a = fr_from_be_bytes(take(32)?);
-    let t_1 = pt(take(33)?)?;
-    let t_2 = pt(take(33)?)?;
-    let that = fr_from_be_bytes(take(32)?);
-    let mu = fr_from_be_bytes(take(32)?);
-    let c = fr_from_be_bytes(take(32)?);
-    let s_sk = fr_from_be_bytes(take(32)?);
-    let s_r = fr_from_be_bytes(take(32)?);
-    let s_b = fr_from_be_bytes(take(32)?);
-    let s_tau = fr_from_be_bytes(take(32)?);
+    let z_a = fr_from_be_bytes(take(32, "z_A")?);
+    let t_1 = pt(take(33, "T_1")?, "T_1")?;
+    let t_2 = pt(take(33, "T_2")?, "T_2")?;
+    let that = fr_from_be_bytes(take(32, "that")?);
+    let mu = fr_from_be_bytes(take(32, "mu")?);
+    let c = fr_from_be_bytes(take(32, "c")?);
+    let s_sk = fr_from_be_bytes(take(32, "s_sk")?);
+    let s_r = fr_from_be_bytes(take(32, "s_r")?);
+    let s_b = fr_from_be_bytes(take(32, "s_b")?);
+    let s_tau = fr_from_be_bytes(take(32, "s_tau")?);
     // IP section: a(32) b(32) + 7 rounds of L(33) R(33)
-    let ip_a = sc(take(32)?)?;
-    let ip_b = sc(take(32)?)?;
+    let ip_a = sc(take(32, "ip_a")?)?;
+    let ip_b = sc(take(32, "ip_b")?)?;
     let mut ls = Vec::with_capacity(7);
     let mut rs = Vec::with_capacity(7);
-    for _ in 0..7 {
-        ls.push(pt(take(33)?)?);
-        rs.push(pt(take(33)?)?);
+    for i in 0..7 {
+        ls.push(pt(take(33, "L")?, &format!("L[{}]", i))?);
+        rs.push(pt(take(33, "R")?, &format!("R[{}]", i))?);
     }
     Ok(bulletproof::Proof {
         ba, bs, a, b, clng, crng, c_0g, dg, y_0g, gg, c_xg, y_xg, u,
@@ -909,6 +914,15 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             }
             "tx_serialize" => {
                 let tx = tx_from_in(inp)?;
+                // Reject unknown tx types gracefully (matches Go's behavior)
+                let valid = matches!(tx.tx_type, 0..=5);
+                if !valid {
+                    return Err(format!("unknown transaction type {}", tx.tx_type));
+                }
+                // Version must be 1 (only supported version on mainnet)
+                if tx.version != 1 {
+                    return Err(format!("transaction version {} not supported", tx.version));
+                }
                 let ser = tx.serialize(3);
                 let header = tx.serialize_header(3);
                 let core = tx.serialize_core_statement(3);

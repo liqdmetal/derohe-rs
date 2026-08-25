@@ -84,10 +84,19 @@ def main():
     # mid-chain height checks the DELTA over a dense window with the tree
     # seeded by the checkpoint roothash via a synthetic reconstruction.
 
-    # Run 1: genesis -> 200 blocks (early chain, few txs, cheap)
+    # DENSE coverage: 100-block contiguous windows at 7 epoch points
+    # genesis, 100k, 1M, 5M, 7.4M (pre-HF3), 7.5M (post-HF3), 7.51M+ (tip area)
+    # State replay is sequential within each window (tree must be seeded from genesis)
+    # Genesis window: 0-199 (needs full sequential seed)
     heights = list(range(0, 200))
-    # Run 2: a dense mid-chain window (100 blocks at ~5.5M, post-HF2)
-    heights += list(range(5500000, 5500100))
+    # Additional windows — state replay will check the PRE-state invariant
+    # (computed root vs embedded roothash) at each block
+    heights += list(range(100000, 100100))
+    heights += list(range(1000000, 1000100))
+    heights += list(range(5000000, 5000100))
+    heights += list(range(7400000, 7400100))
+    heights += list(range(7500000, 7500100))
+    heights += list(range(7510000, 7510100))
 
     # The replay engine: maintain a tree in the RUST oracle, apply each
     # block's miner tx + txs, and after each block compare the tree root

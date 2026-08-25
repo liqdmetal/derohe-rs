@@ -50,11 +50,23 @@ def main():
 
     heights = [0, 1, 2, 3, 4, 5, 10, 20, 50, 100, 200, 500, 1000, 2000,
                5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000,
-               2000000, 3000000, 4000000, 5000000, 6000000, 7000000, top]
-    # dense contiguous range: 100 blocks at a mid-chain height
-    dense_start = 50000
-    heights = sorted(set(h for h in heights if 0 <= h <= top) |
-                     set(range(dense_start, dense_start + 100)))
+               2000000, 3000000, 4000000, 5000000, 6000000, 7000000, 7504640,
+               7504641, 7504642, top]
+    # DENSE coverage: 100-block contiguous windows at 7 epoch points
+    # genesis, 100k, 1M, 5M, 7.4M (pre-HF3), 7.5M (post-HF3), 7.51M+ (tip area)
+    dense_windows = [
+        range(0, 100),           # genesis window
+        range(100000, 100100),   # 100k
+        range(1000000, 1000100), # 1M
+        range(5000000, 5000100), # 5M
+        range(7400000, 7400100), # pre-HF3
+        range(7500000, 7500100), # post-HF3
+        range(7510000, 7510100), # current tip area
+    ]
+    height_set = set(h for h in heights if 0 <= h <= top)
+    for w in dense_windows:
+        height_set |= set(h for h in w if h <= top)
+    heights = sorted(height_set)
 
     block_fail = []
     tx_fail = []

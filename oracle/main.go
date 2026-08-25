@@ -2037,6 +2037,36 @@ func handle(id int, op string, raw json.RawMessage) {
 		}()
 		ok(id, map[string]interface{}{"verified": verified})
 
+	// ---- debug: dump proof hex from a tx blob ------------------------------
+
+	case "tx_proof_dump":
+		blobS, err := str(in, "bytes")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		blob, err := unhex(blobS)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var tx transaction.Transaction
+		if err := tx.Deserialize(blob); err != nil {
+			fail(id, err)
+			return
+		}
+		var buf bytes.Buffer
+		tx.Payloads[0].Proof.Serialize(&buf)
+		var stmt bytes.Buffer
+		tx.Payloads[0].Statement.Serialize(&stmt)
+		ok(id, map[string]interface{}{
+			"proof_hex":     hex.EncodeToString(buf.Bytes()),
+			"statement_hex": hex.EncodeToString(stmt.Bytes()),
+			"ring":          len(tx.Payloads[0].Statement.Publickeylist_pointers) / int(tx.Payloads[0].Statement.Bytes_per_publickey),
+			"bpp":           tx.Payloads[0].Statement.Bytes_per_publickey,
+			"m":             crypto.GetPowerof2(len(tx.Payloads[0].Statement.Publickeylist_pointers) / int(tx.Payloads[0].Statement.Bytes_per_publickey)),
+		})
+
 	// ---- Phase 5: balance serialization (NonceBalance) --------------------
 
 	case "noncebalance_marshal":
