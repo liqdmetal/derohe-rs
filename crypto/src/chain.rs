@@ -432,3 +432,44 @@ pub fn process_transaction_sc(
     }
     Ok(fees)
 }
+
+/// Add_Complete_Block — apply a full block (its txs + the miner tx) to the
+/// persistent balance + SC_META trees. Returns (fees, balance_root,
+/// sc_meta_root). Mirrors blockchain.go Add_Complete_Block's execute phase
+/// (the commit/snapshot part is the caller's store).
+pub fn add_complete_block(
+    balance_tree: &mut Tree,
+    sc_meta: &mut Tree,
+    bl: &crate::block::Block,
+    txs: &[Transaction],
+    height: u64,
+    genesis: bool,
+    k0_floor: Option<u64>,
+) -> Result<(u64, [u8; 32], [u8; 32]), String> {
+    // ensure the miner is registered (zero balance) so the reward add works
+    if !genesis && balance_tree.get(&bl.miner_tx.miner_address.to_vec()).is_none() {
+        if let Ok(pk) = decode_compressed(&bl.miner_tx.miner_address) {
+            let zb = ElGamal::new(pk, crate::hash_to_point::base_g());
+            let nb = crate::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+            balance_tree.put(&bl.miner_tx.miner_address, &nb.serialize());
+        }
+    }
+    let mut fees = 0u64;
+    for tx in txs {
+        fees += process_transaction(&mut std::collections::HashMap::new(), tx, balance_tree, height, true);
+        if tx.tx_type == TX_SC {
+            let mut cache = std::collections::HashMap::new();
+            let mut ss = crate::sc::Snapshot { trees: std::collections::HashMap::new() };
+            let blid = bl.get_hash();
+            let _ = process_transaction_sc(
+                &mut cache, &mut ss, balance_tree, sc_meta, height, height, 0,
+                &blid, tx, k0_floor,
+            );
+        }
+    }
+    process_miner_transaction(
+        &bl.miner_tx.miner_address, bl.miner_tx.value,
+        &bl.mini_blocks, genesis, balance_tree, fees, height,
+    );
+    Ok((fees, balance_tree.hash(), sc_meta.hash()))
+}
