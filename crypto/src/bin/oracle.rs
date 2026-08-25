@@ -1663,15 +1663,18 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "strict_point_decode" => {
                 // Mirror of Go dvm.strictDecodeG1 (K0/I3 wargame fix): a
                 // canonical compressed encoding must have x < p. Go's
-                // lenient decoder accepts x>=p; the strict boundary must
-                // match across implementations or contracts diverge.
-                // point_from_hex already applies the strict x < p check
-                // (curve.rs:102: Fq::from_bigint -> "x >= field prime").
-                // Verdict-only output — the err text is diagnostic.
+                // LENIENT decoder (proof points) accepts x>=p via unreduced
+                // big-int arithmetic; the STRICT boundary (DVM builtins)
+                // still rejects them. Verdict-only output.
                 let b = hex_decode(&s("point")?)?;
                 if b.len() != 33 {
                     Ok(json!({"ok": false}))
                 } else {
+                    // strict: x must be < p (canonical field element)
+                    let x = num_bigint::BigUint::from_bytes_be(&b[..32]);
+                    if x >= dero_crypto::curve::p_as_biguint() {
+                        return Ok(json!({"ok": false}));
+                    }
                     match point_from_hex(&s("point")?) {
                         Ok(_) => Ok(json!({"ok": true})),
                         Err(_) => Ok(json!({"ok": false})),

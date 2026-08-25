@@ -1458,11 +1458,12 @@ End Function""",
         per_op[op] = per_op.get(op, 0) + 1
         g_ok, r_ok = resp_go.get("ok"), resp_rust.get("ok")
         if resp_go["id"] == div_ff_id:
-            # documented divergence: Go UB on x >= p, Rust rejects
-            if g_ok and not r_ok:
-                print(f"  [note] id={div_ff_id} x>=p divergence confirmed (Go UB, Rust strict) — expected")
-                return
-            failures.append((op, resp_go["id"], f"expected x>=p divergence, got go={g_ok} rust={r_ok}"))
+            # RESOLVED divergence: decode_compressed now replicates Go's
+            # unreduced big-int Decompress exactly (x >= p accepted), so both
+            # sides must AGREE. The wallet-transfer state replay proved the
+            # Go semantics (x >= p points occur in real proofs).
+            if g_ok != r_ok:
+                failures.append((op, resp_go["id"], f"x>=p decode: go={g_ok} rust={r_ok} (should agree now)"))
             return
         if g_ok != r_ok:
             req = next((r for r in (phase_a + phase_b + phase_c + phase_d + phase_e + phase_f + phase_g + phase_h + phase_i + phase_j + phase_k + phase_l + phase_m + phase_n + phase_o + phase_p + phase_q + phase_r + phase_s + phase_t + phase_u) if r["id"] == resp_go["id"]), None)
