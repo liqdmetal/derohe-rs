@@ -12,3 +12,6 @@ __pycache__/
 harness/phase_*_requests.json
 harness/phase_*_extra.json
 bin/*.exe
+target/
+wallet-ffi/target/
+wasm-light-client/target/
