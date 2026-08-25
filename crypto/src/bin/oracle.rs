@@ -1038,7 +1038,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                                 &blid, &tx, Some(0), // K0 floor: active from height 0 in simulator
                             );
                             if let Err(e) = &r {
-                                eprintln!("SC apply err: {}", e);
+                                eprintln!("SC apply err at h{}: {}", height, e);
                             }
                             // expose the SCID data-tree hash for the harness
                             let txid = tx.get_hash(tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(3));

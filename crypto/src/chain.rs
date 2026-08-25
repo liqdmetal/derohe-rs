@@ -284,6 +284,10 @@ pub fn process_transaction_sc(
         Some(a) => a,
         None => return Ok(fees),
     };
+    if std::env::var("SC_DEBUG").is_ok() {
+        let ks: Vec<String> = tx.scdata.iter().map(|a| a.name.clone()).collect();
+        eprintln!("SC tx action={} scdata keys={:?}", action, ks);
+    }
     // txid/scid = keccak(core statement). The statement's bpp comes from the
     // WIRE (wallet txs use 2, mainnet 3) — must match Go's GetHash exactly
     // or the SCID (and thus the SC_META key + the state root) diverges.
@@ -332,11 +336,18 @@ pub fn process_transaction_sc(
                 Some(c) => c,
                 None => return Err("no code provided".into()),
             };
+            if std::env::var("SC_DEBUG").is_ok() {
+                eprintln!("SC code len={} head={:?}", code.len(), &code[..code.len().min(80)]);
+            }
             if code.is_empty() {
                 return Err("no code provided".into());
             }
             let sc = crate::dvm::parse_smart_contract(&code)
-                .map_err(|e| format!("parse error: {}", e))?;
+                .map_err(|e| format!("parse error: {e}"))?;
+            if std::env::var("SC_DEBUG").is_ok() {
+                let ks: Vec<&String> = sc.functions.keys().collect();
+                eprintln!("SC parsed functions: {:?}", ks);
+            }
             if sc.functions.contains_key("InitializePrivate") {
                 meta_type = 1;
             }
@@ -364,7 +375,10 @@ pub fn process_transaction_sc(
             let mut meta_bytes = vec![meta_type];
             meta_bytes.extend_from_slice(&[0u8; 32]); // datahash zero (pre-HF2)
             w_sc_tree.put(&sc_meta_key(&scid), &meta_bytes);
-            entrypoint = if meta_type == 1 { "InitializePrivate" } else { "Initialize" }.to_string();
+            // entrypoint: PRIVATE bit (0x01) is tested BITWISE like Go's
+            // meta.IsPrivate() — the K0 NoSigner bit (0x80) may also be set,
+            // making meta_type 0x81. `== 1` would wrongly select Initialize.
+            entrypoint = if meta_type & 0x01 == 0x01 { "InitializePrivate" } else { "Initialize" }.to_string();
             let (balance, sc_parsed) = read_sc(&mut w_sc_data_tree, &scid);
             let sc_parsed = sc_parsed.ok_or("SC not found")?;
             execute_sc_function(

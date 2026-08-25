@@ -146,6 +146,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_private_sc() {
+        // the private SC from the stress chain (h34): InitializePrivate only
+        let code = "Function InitializePrivate() Uint64\n10 STORE(\"secret\", 42)\n20 RETURN 0\nEnd Function";
+        let sc = crate::dvm::parse_smart_contract(code).expect("parse");
+        assert!(sc.functions.contains_key("InitializePrivate"),
+            "InitializePrivate missing, got: {:?}", sc.functions.keys().collect::<Vec<_>>());
+        assert!(!sc.functions.contains_key("Initialize"));
+    }
+
+    #[test]
     fn generator_roundtrip() {
         let g = G1Projective::generator(); // (1, 2) on y^2 = x^3 + 3
         let enc = encode_compressed(&g);

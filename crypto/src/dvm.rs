@@ -677,8 +677,12 @@ pub fn run_smart_contract_internal(
         return_value: Variable { name: String::new(), vtype: function_call.return_value.vtype, value_uint64: 0, value_string: String::new() },
         version: String::new(),
     };
-    dvm.state = state.clone();
-    dvm.state.store.state = Some(state.clone());
+    // NOTE: mem::replace moved the CALLER's real state into dvm.state and
+    // left the empty placeholder in *state. Do NOT clobber dvm.state from
+    // *state here — that would wipe the signer/chain_inputs (SIGNER() would
+    // return empty). The caller's state is restored from dvm.state at the
+    // end of this function.
+    dvm.state.store.state = Some(dvm.state.clone());
 
     // parse parameters into locals
     for p in &function_call.params {
@@ -1647,8 +1651,12 @@ fn builtin_send_dero_to_address(dvm: &mut DVMInterpreter, args: &[Expr]) -> Resu
     let addr = dvm.eval(&args[0])?;
     let amount = dvm.eval(&args[1])?;
     let addr_s = addr.as_string().ok_or("address must be valid DERO network address")?;
+    if std::env::var("SC_DEBUG").is_ok() {
+        eprintln!("SEND_DERO addr len={} hex={:?}", addr_s.len(), hex::encode(addr_s.as_bytes()));
+    }
+    // Go: DecodeCompressed([]byte(addr)) — a 33-byte compressed point
     if !(addr_s.len() == 33 && crate::curve::decode_compressed(addr_s.as_bytes()).is_ok()) {
-        panic!("address must be valid DERO network address");
+        return Err("address must be valid DERO network address".into());
     }
     let amount = amount.as_uint64().ok_or("amount must be valid  uint64")?;
     if amount == 0 {
