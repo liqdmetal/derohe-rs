@@ -657,6 +657,32 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
 
     let result: Result<Value, String> = (|| {
         match op {
+            "mnemonic_to_key" => {
+                let words: Vec<String> = s("words")?
+                    .split_whitespace()
+                    .map(|w| w.to_string())
+                    .collect();
+                let key = dero_crypto::mnemonics::words_to_key(&words)?;
+                Ok(json!({"seed": hex::encode(key)}))
+            }
+            "pubkey_from_seed" => {
+                let seed = hex_decode(&s("seed")?)?;
+                if seed.len() != 32 {
+                    return Err("seed must be 32 bytes".into());
+                }
+                let mut sb = [0u8; 32];
+                sb.copy_from_slice(&seed);
+                // Go: GPoint.ScalarMult(Seed) where Seed = big.Int of the
+                // seed BYTES (big-endian interpretation). Replicate exactly.
+                let mut le = [0u8; 32];
+                for i in 0..32 {
+                    le[i] = sb[31 - i];
+                }
+                let fr = ark_bn254::Fr::from_le_bytes_mod_order(&le);
+                let g = dero_crypto::hash_to_point::base_g();
+                let pk = g.mul_bigint(fr.into_bigint());
+                Ok(json!({"public": hex::encode(dero_crypto::curve::encode_compressed(&pk))}))
+            }
             "keccak256" | "keccak512" => {
                 let data = hex_decode(&s("data")?)?;
                 let out = if op == "keccak256" {

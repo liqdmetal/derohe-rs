@@ -37,6 +37,7 @@ import (
 	"github.com/deroproject/derohe/dvm"
 	"github.com/deroproject/derohe/globals"
 	"github.com/deroproject/derohe/rpc"
+	"github.com/deroproject/derohe/walletapi/mnemonics"
 	"github.com/deroproject/derohe/transaction"
 	"github.com/deroproject/graviton"
 )
@@ -951,6 +952,18 @@ func handle(id int, op string, raw json.RawMessage) {
 	}
 
 	switch op {
+	case "mnemonic_to_key":
+		words, err := s(in, "words")
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		_, seed, err := mnemonics.Words_To_Key(words)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		ok(id, map[string]interface{}{"seed": fmt.Sprintf("%x", seed.Bytes())})
 	case "keccak256", "keccak512":
 		data, err := s(in, "data")
 		if err != nil {

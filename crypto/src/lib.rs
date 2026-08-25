@@ -20,6 +20,7 @@ pub mod graviton;
 pub mod hash_to_point;
 pub mod innerproduct;
 pub mod keccak;
+pub mod mnemonics;
 pub mod pedersen;
 pub mod pointvector;
 pub mod polynomial;
