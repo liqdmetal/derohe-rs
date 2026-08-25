@@ -49,4 +49,4 @@ for l in p.stdout.splitlines():
         if xor != chain_rh:
             fails += 1
             print(f'h{h}: computed={xor[:16]} chain={chain_rh[:16]} MISMATCH')
-print(f'REORG REPLAY (winning chain h0-{top}): {fails} failures')
+print(f'STATE REPLAY (winning fork chain): {fails} failures across {top} blocks')
