@@ -2238,7 +2238,12 @@ func handle(id int, op string, raw json.RawMessage) {
 		if panicked {
 			return
 		}
-		ok(id, map[string]interface{}{"bytes": hx(ser), "hash": hx(h[:])})
+		scids := []string{}
+		for _, p := range tx.Payloads {
+			scids = append(scids, hx(p.SCID[:]))
+		}
+		ok(id, map[string]interface{}{"bytes": hx(ser), "hash": hx(h[:]),
+			"payload_scids": scids, "txtype": tx.TransactionType})
 
 	// ---- Phase 7: block serialization -------------------------------------
 
