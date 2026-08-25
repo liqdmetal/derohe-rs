@@ -32,8 +32,12 @@ use std::sync::{Arc, Mutex};
 
 struct ChainStore {
     blocks: Vec<(Block, Vec<Transaction>)>, // height-indexed (topo order)
+    txids: Vec<Vec<[u8; 32]>>,              // per-block original chain txids
+    raw_txs: Vec<Vec<Vec<u8>>>,             // per-block original raw tx blobs
+    roothashes: Vec<[u8; 32]>,              // per-block roothash (after apply)
     balance: Tree,
     sc_meta: Tree,
+    genesis_snapshot: Option<(Vec<(Vec<u8>, Vec<u8>)>, Vec<(Vec<u8>, Vec<u8>)>)>, // (balance, meta) at height 0
     height: u64,
     k0_floor: Option<u64>,
 }
@@ -42,8 +46,12 @@ impl ChainStore {
     fn new() -> Self {
         ChainStore {
             blocks: Vec::new(),
+            txids: Vec::new(),
+            raw_txs: Vec::new(),
+            roothashes: Vec::new(),
             balance: Tree::new("BALANCE_TREE"),
             sc_meta: Tree::new("SC_META"),
+            genesis_snapshot: None,
             height: 0,
             k0_floor: Some(0), // simulator: K0 active from height 0
         }
@@ -168,18 +176,30 @@ fn peer_url_host(peer: &str) -> String {
 // Sync: pull blocks from the peer, verify + apply
 // ---------------------------------------------------------------------------
 
-fn sync_from_peer(store: &mut ChainStore, peer: &str) -> Result<u64, String> {
+fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result<u64, String> {
     let info = rpc_call(peer, "DERO.GetInfo", serde_json::json!({}))?;
     let peer_height = info["height"].as_u64().unwrap_or(0);
     let mut applied = 0u64;
     // seed from genesis (height 0 = premine state via DumpBalances)
     if store.blocks.is_empty() {
         seed_genesis(store, peer)?;
+        // snapshot the SEEDED genesis state so we can serve height-0 state
+        // to peer sync (peer re-applies h1..hN on top of exactly this)
+        let pre_balance = store.balance.clone();
+        let pre_meta = store.sc_meta.clone();
+        let pre_b: Vec<(Vec<u8>, Vec<u8>)> = dero_crypto::graviton::tree_keys(&pre_balance)
+            .iter().filter_map(|k| pre_balance.get(k).map(|v| (k.clone(), v))).collect();
+        let pre_m: Vec<(Vec<u8>, Vec<u8>)> = dero_crypto::graviton::tree_keys(&pre_meta)
+            .iter().filter_map(|k| pre_meta.get(k).map(|v| (k.clone(), v))).collect();
+        store.genesis_snapshot = Some((pre_b, pre_m));
         // also store the genesis block so h1's tip reference resolves
         let g = rpc_call(peer, "DERO.GetBlock", serde_json::json!({"height": 0}))?;
         let gblob = hex_decode(g["blob"].as_str().ok_or("no genesis blob")?)?;
         let gblock = Block::deserialize(&gblob)?;
         store.blocks.push((gblock, Vec::new()));
+        store.roothashes.push(store.roothash());
+        store.txids.push(Vec::new());
+        store.raw_txs.push(Vec::new());
     }
     for h in (store.height + 1)..=peer_height {
         let blk = rpc_call(peer, "DERO.GetBlock", serde_json::json!({"height": h}))?;
@@ -188,16 +208,45 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str) -> Result<u64, String> {
         let chain_rh = bj["roothash"].as_str().unwrap_or("").to_string();
         let raw = hex_decode(blob)?;
         let block = Block::deserialize(&raw)?;
-        // fetch tx blobs
+        // fetch tx blobs (RAW — keep original bytes + chain txids so the
+        // hash matches the block header even if a proof fails lenient parse)
         let mut txs = Vec::new();
+        let mut raw_txs = Vec::new();
+        let mut block_txids = Vec::new();
         if let Some(txhs) = bj["tx_hashes"].as_array() {
             for th in txhs {
                 let th = th.as_str().unwrap_or("");
+                let mut thb = [0u8; 32];
+                if let Ok(t) = hex_decode(th) {
+                    if t.len() == 32 {
+                        thb.copy_from_slice(&t);
+                    }
+                }
+                block_txids.push(thb);
                 let t = rpc_call(peer, "DERO.GetTransaction", serde_json::json!({"txs_hashes": [th]}))?;
                 if let Some(txs_arr) = t["txs"].as_array() {
                     for txj in txs_arr {
                         let tb = txj["blob"].as_str().ok_or("no tx blob")?;
-                        txs.push(Transaction::deserialize(&hex_decode(tb)?, 3)?);
+                        let raw_tx = hex_decode(tb)?;
+                        // the txid from the chain header must match the blob
+                        let tx = tx_deserialize_lenient(&raw_tx, simulator)
+                            .map_err(|e| format!("h{h} tx {th}: {e}"))?;
+                        // verify the blob's hash matches the chain's txid
+                        // (strict in mainnet; in simulator the chain may
+                        // contain lax txs whose re-serialize diverges)
+                        let bpp = tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(3);
+                        let computed = hex::encode(tx.get_hash(bpp));
+                        if computed != th.to_lowercase() {
+                            if simulator {
+                                // lax tx: accept (the simnode mined it
+                                // without verification)
+                                eprintln!("h{h}: lax tx {th} hash diverges (simulator accept)");
+                            } else {
+                                return Err(format!("h{h}: tx hash mismatch computed={computed} chain={th}"));
+                            }
+                        }
+                        txs.push(tx);
+                        raw_txs.push(raw_tx);
                     }
                 }
             }
@@ -216,7 +265,7 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str) -> Result<u64, String> {
         let (_, b_root, m_root) = chain::add_complete_block(
             &mut store.balance, &mut store.sc_meta, &block, &txs, h,
             h == 0, store.k0_floor,
-        )?;
+        ).map_err(|e| format!("h{h}: {e}"))?;
         let xor = {
             let mut out = [0u8; 32];
             for i in 0..32 {
@@ -229,12 +278,14 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str) -> Result<u64, String> {
             return Err(format!("h{h}: roothash mismatch computed={computed} chain={chain_rh}"));
         }
         store.blocks.push((block, txs));
+        store.roothashes.push(xor);
+        store.txids.push(block_txids);
+        store.raw_txs.push(raw_txs);
         store.height = h;
         applied += 1;
     }
     Ok(applied)
 }
-
 fn seed_genesis(store: &mut ChainStore, peer: &str) -> Result<(), String> {
     // the genesis state = premine balances + base SC meta; the simnode
     // dumps them via DumpBalances at height 0.
@@ -430,12 +481,17 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
             for t in txs {
                 tx_hashes.push(hex::encode(t.get_hash(3)));
             }
+            // serve the ORIGINAL chain txids (the lenient parse may have
+            // changed re-serialized hashes)
+            if let Some(tids) = st.txids.get(h as usize) {
+                tx_hashes = tids.iter().map(|t| hex::encode(t)).collect();
+            }
             serde_json::json!({
                 "blob": hex::encode(blk.serialize(false)),
                 "json": serde_json::json!({
                     "height": blk.height,
                     "blid": hex::encode(blk.get_hash()),
-                    "roothash": hex::encode(st.roothash()),
+                    "roothash": hex::encode(st.roothashes.get(h as usize).copied().unwrap_or([0u8; 32])),
                     "tx_hashes": tx_hashes,
                 }).to_string(),
             })
@@ -444,11 +500,19 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
             let th = params["txs_hashes"][0].as_str().unwrap_or("");
             let txh = hex_decode(th).unwrap_or_default();
             let mut found = serde_json::Value::Null;
-            for (blk, txs) in &st.blocks {
+            // search by the ORIGINAL chain txids (index-aligned with txs),
+            // serving the RAW blob (byte-identical to the chain)
+            for (bi, (blk, _txs)) in st.blocks.iter().enumerate() {
                 let _ = blk;
-                for t in txs {
-                    if t.get_hash(3) == txh.as_slice() {
-                        found = serde_json::json!([{"blob": hex::encode(t.serialize(3))}]);
+                if let Some(tids) = st.txids.get(bi) {
+                    for (ti, tid) in tids.iter().enumerate() {
+                        if tid.as_slice() == txh.as_slice() {
+                            if let Some(raws) = st.raw_txs.get(bi) {
+                                if let Some(raw) = raws.get(ti) {
+                                    found = serde_json::json!([{"blob": hex::encode(raw)}]);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -465,12 +529,49 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
         }
         "DERO.GetStateRoot" => serde_json::json!({"roothash": hex::encode(st.roothash())}),
         "DERO.DumpBalances" => {
+            let want_h = params["height"].as_u64().unwrap_or(0);
             let mut entries: Vec<serde_json::Value> = Vec::new();
-            // dump all keys via the tree's internal nodes — use a scan of
-            // known keys from the last block's txs + miner + a full walk
-            // (we store the tree in memory; expose a best-effort dump)
-            serde_json::json!({"entries": entries, "root": hex::encode(st.balance.hash()),
-                "meta_root": hex::encode(st.sc_meta.hash())})
+            let mut meta: Vec<serde_json::Value> = Vec::new();
+            let (b_root, m_root) = if want_h == 0 {
+                // serve the genesis-state snapshot (pre-block trees + seed)
+                if let Some((b, m)) = &st.genesis_snapshot {
+                    for (k, v) in b {
+                        entries.push(serde_json::json!({"key": hex::encode(k), "value": hex::encode(v)}));
+                    }
+                    for (k, v) in m {
+                        meta.push(serde_json::json!({"key": hex::encode(k), "value": hex::encode(v)}));
+                    }
+                    (hex::encode(st.roothashes.first().copied().unwrap_or([0u8; 32])), String::new())
+                } else {
+                    // no snapshot: fall back to live (already seeded) state
+                    for k in dero_crypto::graviton::tree_keys(&st.balance) {
+                        if let Some(v) = st.balance.get(&k) {
+                            entries.push(serde_json::json!({"key": hex::encode(&k), "value": hex::encode(&v)}));
+                        }
+                    }
+                    for k in dero_crypto::graviton::tree_keys(&st.sc_meta) {
+                        if let Some(v) = st.sc_meta.get(&k) {
+                            meta.push(serde_json::json!({"key": hex::encode(&k), "value": hex::encode(&v)}));
+                        }
+                    }
+                    (hex::encode(st.balance.hash()), hex::encode(st.sc_meta.hash()))
+                }
+            } else {
+                // non-zero height: serve the live (current) trees
+                for k in dero_crypto::graviton::tree_keys(&st.balance) {
+                    if let Some(v) = st.balance.get(&k) {
+                        entries.push(serde_json::json!({"key": hex::encode(&k), "value": hex::encode(&v)}));
+                    }
+                }
+                for k in dero_crypto::graviton::tree_keys(&st.sc_meta) {
+                    if let Some(v) = st.sc_meta.get(&k) {
+                        meta.push(serde_json::json!({"key": hex::encode(&k), "value": hex::encode(&v)}));
+                    }
+                }
+                (hex::encode(st.balance.hash()), hex::encode(st.sc_meta.hash()))
+            };
+            serde_json::json!({"entries": entries, "root": b_root,
+                "meta_root": m_root, "meta_entries": meta})
         }
         "DERO.SubmitTX" => {
             let tb = params["txs"].as_array().and_then(|a| a.get(0)).and_then(|t| t["tx"].as_str()).unwrap_or("");
@@ -544,6 +645,16 @@ fn serve(port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Mempool>>,
 // helpers
 // ---------------------------------------------------------------------------
 
+fn tx_deserialize_lenient(blob: &[u8], simulator: bool) -> Result<Transaction, String> {
+    if simulator {
+        // simulator laxity: the reference accepts txs without proof
+        // verification, so never fail on a proof decode.
+        Transaction::deserialize_skip_proofs(blob)
+    } else {
+        Transaction::deserialize(blob, 3)
+    }
+}
+
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     hex::decode(s).map_err(|e| format!("bad hex: {e}"))
 }
@@ -565,6 +676,7 @@ fn main() {
     let mut peer = "http://127.0.0.1:25000/json_rpc".to_string();
     let mut port: u16 = 26000;
     let mut mine = false;
+    let mut simulator = true; // simulator mode: skip proof verification (matches reference simnode laxity)
     let mut miner_addr = String::new();
     let mut i = 1;
     while i < args.len() {
@@ -573,8 +685,9 @@ fn main() {
             "--port" => { i += 1; port = args[i].parse().unwrap_or(26000); }
             "--mine" => mine = true,
             "--miner" => { i += 1; miner_addr = args[i].clone(); }
+            "--mainnet" => simulator = false, // verify proofs strictly
             "--help" => {
-                println!("dero-node [--peer URL] [--port N] [--mine] [--miner ADDR]");
+                println!("dero-node [--peer URL] [--port N] [--mine] [--miner ADDR] [--mainnet]");
                 return;
             }
             _ => {}
@@ -588,7 +701,7 @@ fn main() {
     // sync from peer
     {
         let mut st = store.lock().unwrap();
-        match sync_from_peer(&mut st, &peer) {
+        match sync_from_peer(&mut st, &peer, simulator) {
             Ok(n) => println!("synced {n} blocks from {peer} (height {})", st.height),
             Err(e) => {
                 eprintln!("sync error: {e}");
@@ -623,25 +736,34 @@ fn main() {
             let mut st = store.lock().unwrap();
             let mp = mempool.lock().unwrap();
             let mut blk = miner.build_block(&st, &mp, ts);
+            // pull the included txs' blobs out of the mempool BEFORE dropping
+            let txs: Vec<Transaction> = blk
+                .tx_hashes
+                .iter()
+                .filter_map(|h| mp.txs.get(h).cloned())
+                .collect();
             drop(mp);
             // mine it (simulator: no PoW)
             let mut sim_miner = Miner { address: addr, simulator: true };
             sim_miner.solve(&mut blk);
-            // apply it locally
-            let txs: Vec<Transaction> = blk
-                .tx_hashes
-                .iter()
-                .filter_map(|h| {
-                    // pull from mempool by hash
-                    None
-                })
-                .collect();
             let genesis = blk.height == 0;
             let k0 = st.k0_floor;
             let ChainStore { balance, sc_meta, .. } = &mut *st;
             match chain::add_complete_block(balance, sc_meta, &blk, &txs, blk.height, genesis, k0) {
-                Ok(_) => {
+                Ok((_, _, _)) => {
+                    let rh = {
+                        let b = st.balance.hash();
+                        let m = st.sc_meta.hash();
+                        let mut o = [0u8; 32];
+                        for i in 0..32 {
+                            o[i] = b[i] ^ m[i];
+                        }
+                        o
+                    };
                     st.blocks.push((blk.clone(), txs));
+                    st.roothashes.push(rh);
+                    st.txids.push(blk.tx_hashes.clone());
+                    st.raw_txs.push(Vec::new()); // mined txs: raw = re-serialized
                     st.height = blk.height;
                     println!("mined block h{} {}", blk.height, hex::encode(&blk.get_hash()[..8]));
                 }
@@ -653,7 +775,7 @@ fn main() {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
             let mut st = store.lock().unwrap();
-            match sync_from_peer(&mut st, &peer) {
+            match sync_from_peer(&mut st, &peer, simulator) {
                 Ok(n) => {
                     if n > 0 {
                         println!("synced {n} new blocks (height {})", st.height);

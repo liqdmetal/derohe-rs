@@ -134,10 +134,172 @@ impl Transaction {
     pub fn serialize(&self, bpp: u8) -> Vec<u8> {
         let mut out = self.serialize_header(bpp);
         for p in &self.payloads {
-            let proof = p.proof.as_ref().expect("payload proof");
-            out.extend_from_slice(&bulletproof::serialize(proof));
+            if let Some(proof) = &p.proof {
+                out.extend_from_slice(&bulletproof::serialize(proof));
+            }
         }
         out
+    }
+
+    /// Go `Deserialize` with proof decoding TOLERATED: if a proof point
+    /// fails to decode, the proof is set to None instead of erroring. The
+    /// statement (ring keys, changes, fees) is always parsed. Used by the
+    /// node in simulator mode where the reference skips proof verification.
+    pub fn deserialize_skip_proofs(buf: &[u8]) -> Result<Transaction, String> {
+        let mut pos = 0usize;
+        let mut take_var = |buf: &[u8], pos: &mut usize| -> Result<u64, String> {
+            let (v, n) = uvarint_decode(&buf[*pos..]).ok_or("bad varint")?;
+            if n <= 0 {
+                return Err("bad varint".into());
+            }
+            *pos += n;
+            Ok(v)
+        };
+
+        let version = take_var(buf, &mut pos)?;
+        if version != 1 {
+            return Err("Transaction version not equal to 1".into());
+        }
+        let source_network = take_var(buf, &mut pos)?;
+        let dest_network = take_var(buf, &mut pos)?;
+        let tx_type = take_var(buf, &mut pos)?;
+        if !valid_type(tx_type) {
+            return Err("unknown transaction type".into());
+        }
+
+        let mut tx = Transaction {
+            version,
+            source_network,
+            dest_network,
+            tx_type,
+            value: 0,
+            miner_address: [0u8; 33],
+            c: [0u8; 32],
+            s: [0u8; 32],
+            height: 0,
+            blid: [0u8; 32],
+            scdata: Arguments::default(),
+            payloads: Vec::new(),
+        };
+
+        if tx_type == TX_PREMINE || tx_type == TX_SC {
+            tx.value = take_var(buf, &mut pos)?;
+        }
+        if tx_type == TX_PREMINE || tx_type == TX_COINBASE || tx_type == TX_REGISTRATION {
+            if buf.len() - pos < 33 {
+                return Err("Invalid Miner Address in Transaction".into());
+            }
+            tx.miner_address.copy_from_slice(&buf[pos..pos + 33]);
+            pos += 33;
+        }
+        if tx_type == TX_REGISTRATION {
+            if buf.len() - pos < 32 {
+                return Err("Invalid C in Transaction".into());
+            }
+            tx.c.copy_from_slice(&buf[pos..pos + 32]);
+            pos += 32;
+            if buf.len() - pos < 32 {
+                return Err("Invalid S in Transaction".into());
+            }
+            tx.s.copy_from_slice(&buf[pos..pos + 32]);
+            pos += 32;
+        }
+
+        if tx_type == TX_BURN || tx_type == TX_NORMAL || tx_type == TX_SC {
+            tx.height = take_var(buf, &mut pos)?;
+            if buf.len() - pos < 32 {
+                return Err("Invalid BLID value in Transaction".into());
+            }
+            tx.blid.copy_from_slice(&buf[pos..pos + 32]);
+            pos += 32;
+            let asset_count = take_var(buf, &mut pos)?;
+            if asset_count < 1 {
+                return Err("Invalid asset_count in Transaction".into());
+            }
+            for _ in 0..asset_count {
+                let mut p = AssetPayload {
+                    scid: [0u8; 32],
+                    burn_value: 0,
+                    rpc_type: 0,
+                    rpc_payload: Vec::new(),
+                    statement: Statement {
+                        publickeylist: Vec::new(),
+                        c: Vec::new(),
+                        cln: Vec::new(),
+                        crn: Vec::new(),
+                        d: crate::hash_to_point::base_g(),
+                        roothash: [0u8; 32],
+                        fees: 0,
+                        pointers: Vec::new(),
+                    },
+                    proof: None,
+                };
+                p.burn_value = take_var(buf, &mut pos)?;
+                if buf.len() - pos < 32 {
+                    return Err("payload scid: short buffer".into());
+                }
+                p.scid.copy_from_slice(&buf[pos..pos + 32]);
+                pos += 32;
+                if buf.len() - pos < 1 {
+                    return Err("payload rpctype: short buffer".into());
+                }
+                p.rpc_type = buf[pos];
+                pos += 1;
+                if buf.len() - pos < PAYLOAD_LIMIT {
+                    return Err("payload rpcpayload: short buffer".into());
+                }
+                p.rpc_payload = buf[pos..pos + PAYLOAD_LIMIT].to_vec();
+                pos += PAYLOAD_LIMIT;
+                let (st, used) = Statement::deserialize(&buf[pos..])?;
+                p.statement = st;
+                pos += used;
+                tx.payloads.push(p);
+            }
+        }
+
+        if tx_type == TX_SC {
+            let sc_len = take_var(buf, &mut pos)?;
+            if sc_len as usize > buf.len() - pos {
+                return Err("SC len out of possible range".into());
+            }
+            tx.scdata = Arguments::unmarshal_binary(&buf[pos..pos + sc_len as usize])?;
+            pos += sc_len as usize;
+        }
+
+        // proofs: parse but tolerate ANY failure (simulator laxity)
+        if tx_type == TX_BURN || tx_type == TX_NORMAL || tx_type == TX_SC {
+            for p in tx.payloads.iter_mut() {
+                let st_bpp = p.statement.bpp();
+                let ring = if p.statement.pointers.is_empty() { 0 } else { p.statement.pointers.len() / st_bpp as usize };
+                // ring must be a power of 2 for the proof length formula;
+                // simulator chains may contain bad rings — skip the proof
+                let m = if ring.is_power_of_two() && ring > 0 {
+                    ring.trailing_zeros() as usize
+                } else {
+                    // unknown/odd ring: can't locate the proof — leave proof
+                    // None and advance past the remainder conservatively
+                    p.proof = None;
+                    continue;
+                };
+                match bulletproof::deserialize(&buf[pos..], m) {
+                    Ok(proof) => {
+                        pos += bulletproof::serialized_len(&proof);
+                        p.proof = Some(proof);
+                    }
+                    Err(_) => {
+                        // skip the proof section by canonical length
+                        pos += Self::proof_len_for_m(m);
+                    }
+                }
+            }
+        }
+
+        Ok(tx)
+    }
+
+    /// The serialized proof length for a given m (ring exponent).
+    pub fn proof_len_for_m(m: usize) -> usize {
+        4 * 33 + m * 8 * 33 + 33 + 2 * m * 32 + 32 + 66 + 9 * 32 + 32 + 32 + 14 * 33
     }
 
     /// Go `SerializeCoreStatement`: header only (excludes proofs).

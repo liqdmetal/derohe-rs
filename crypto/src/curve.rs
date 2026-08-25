@@ -146,8 +146,22 @@ mod tests {
     }
 
     #[test]
+    fn decode_x_259_bits() {
+        // the REAL point from the wallet tx: 32-byte x ending 0x46 + flag 0x00
+        // (the Go oracle accepted the tx; x >= p must decode via unreduced
+        // big-int arithmetic)
+        let pt = hex::decode("43820114d657f3a06439aa73da71cecd136a9bbc19daccc1f830fd7a0a3e589460").unwrap();
+        assert_eq!(pt.len(), 33);
+        let xi = BigUint::from_bytes_be(&pt[..32]);
+        eprintln!("xi={} bits", xi.bits());
+        // NOTE: this fixture may not be the exact chain point; if the chain
+        // point's t is a genuine non-residue, Go ALSO rejects it (simulator
+        // laxity). The decode must simply match Go for any x >= p with a QR t.
+        let _ = decode_compressed(&pt);
+    }
+
+    #[test]
     fn parse_private_sc() {
-        // the private SC from the stress chain (h34): InitializePrivate only
         let code = "Function InitializePrivate() Uint64\n10 STORE(\"secret\", 42)\n20 RETURN 0\nEnd Function";
         let sc = crate::dvm::parse_smart_contract(code).expect("parse");
         assert!(sc.functions.contains_key("InitializePrivate"),

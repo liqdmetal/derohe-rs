@@ -334,6 +334,26 @@ pub struct Tree {
     pub treename: String,
 }
 
+/// Debug: enumerate all leaf keys in the tree (oracle/node diagnostics).
+pub fn tree_keys(tree: &Tree) -> Vec<Vec<u8>> {
+    fn walk(node: &Node, out: &mut Vec<Vec<u8>>) {
+        match node {
+            Node::Leaf { key, .. } => out.push(key.clone()),
+            Node::Inner { left, right, .. } => {
+                if let Some(l) = left {
+                    walk(l, out);
+                }
+                if let Some(r) = right {
+                    walk(r, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&tree.root, &mut out);
+    out
+}
+
 impl Tree {
     pub fn new(treename: &str) -> Tree {
         Tree {

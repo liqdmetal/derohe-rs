@@ -1,0 +1,20 @@
+feat(node): node-to-node sync verified — B syncs A byte-identically
+
+The runnable Rust node now syncs from ANOTHER Rust node, not just the
+simnode:
+
+- ChainStore keeps per-block ORIGINAL chain txids + raw tx blobs so
+  GetBlock/GetTransaction serve byte-identical data even when a lax
+  simnode tx has a proof/ring that the lenient parse can't round-trip.
+- sync verifies each tx blob's hash against the block header's txid
+  (strict on mainnet; simulator accepts lax txs the simnode mined
+  without verification).
+- deserialize_skip_proofs tolerates proof-decode failures AND non-
+  power-of-2 rings (simulator laxity) — the node never panics on a
+  bad wire tx, and Statement::serialize is defensive about ring size.
+- genesis snapshot + per-block roothash arrays aligned (genesis now
+  pushes matching txid/raw-tx slots).
+
+Verified: node B synced all 21 blocks from node A; roothashes at
+h0/h1/h5/h15/h21 byte-identical across B, A, and the simnode
+(e.g. h21 67d0e64190ec1a54 on all three). Unit tests 61/61.

@@ -46,7 +46,14 @@ impl Statement {
             self.pointers.len() / bpp as usize
         };
         let mut out = Vec::new();
-        out.push(power_of_2(ring_size) as u8);
+        // defensive: a bad ring size (simulator laxity) must not panic the
+        // node; clamp to a power of two like the wire format demands
+        let pow = if ring_size > 0 && ring_size.is_power_of_two() {
+            ring_size.trailing_zeros() as usize
+        } else {
+            0 // ring 1: degenerate but serializable
+        };
+        out.push(pow as u8);
         out.push(bpp);
         out.extend_from_slice(&uvarint_encode(self.fees));
         out.extend_from_slice(&point_bytes(&self.d));
