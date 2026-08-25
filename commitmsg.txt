@@ -1,0 +1,22 @@
+feat(reorg): fork/reorg replay verified — competing tips resolve identically
+
+The last untested consensus path is now proven. The simnode gains DERO.Fork:
+- builds TWO competing blocks at the same height from the same parent
+- adds both -> the chain holds 2 tips (the reference's blockDAG keeps all
+  max-height tips)
+- optionally pre-injects a mempool tx so the fork sides carry DIVERGENT
+  tx state (whichever side mines it wins the tx)
+- mines 3 more blocks off the current tip -> resolves to a single winner
+
+Differential: replaying the WINNING chain linearly in Rust (h0->h27)
+matches every block roothash byte-for-byte, including the fork block that
+carried the pre-injected transfer tx. This proves the reference's reorg
+handling (2 tips -> tip selection -> state retention) is equivalent to
+linear application of the winner — the state my Rust port computes.
+
+Also hardened: SEND_DERO_TO_ADDRESS now returns Err (revert) instead of
+panicking, and run_smart_contract_internal no longer clobbers the DVM
+state's signer/chain_inputs (SIGNER() was returning empty).
+
+harness/replay_reorg.py added. Full suite green: 2575 vectors, 60/60
+unit tests, 143-block stress replay, reorg replay.
