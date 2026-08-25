@@ -284,7 +284,15 @@ pub fn process_transaction_sc(
         Some(a) => a,
         None => return Ok(fees),
     };
-    let txid = tx.get_hash(3);
+    // txid/scid = keccak(core statement). The statement's bpp comes from the
+    // WIRE (wallet txs use 2, mainnet 3) — must match Go's GetHash exactly
+    // or the SCID (and thus the SC_META key + the state root) diverges.
+    let bpp = tx
+        .payloads
+        .first()
+        .map(|p| p.statement.bpp())
+        .unwrap_or(3);
+    let txid = tx.get_hash(bpp);
     let scid = txid; // install: scid = txid
     let incoming_value: std::collections::HashMap<[u8; 32], u64> = tx
         .payloads
@@ -318,8 +326,8 @@ pub fn process_transaction_sc(
     let mut meta_type: u8 = 0;
 
     match action {
-        0 => {
-            // SC_INSTALL
+        1 => {
+            // SC_INSTALL (Go rpc.SC_INSTALL = 1; SC_CALL = 0)
             let code = match tx.scdata.get_string("SC_CODE") {
                 Some(c) => c,
                 None => return Err("no code provided".into()),
@@ -346,6 +354,12 @@ pub fn process_transaction_sc(
             // install: write code + meta into the wrapped trees
             let code_var = crate::dvm::Variable::new_string("", &code);
             w_sc_data_tree.put(&sc_code_key(), &code_var.marshal_binary());
+            // the SC's zero-asset balance entry (Go LoadSCAssetValue creates
+            // it at the zero-hash asset key: 8 bytes of zero)
+            let zerokey = [0u8; 32];
+            if w_sc_data_tree.get(&zerokey).is_none() {
+                w_sc_data_tree.put(&zerokey, &[0u8; 8]);
+            }
             // meta: type byte + zeros (Go SC_META_DATA{MarshalBinary})
             let mut meta_bytes = vec![meta_type];
             meta_bytes.extend_from_slice(&[0u8; 32]); // datahash zero (pre-HF2)
@@ -360,8 +374,8 @@ pub fn process_transaction_sc(
                 &[], fees,
             )?;
         }
-        1 => {
-            // SC_CALL
+        0 => {
+            // SC_CALL (Go rpc.SC_CALL = 0)
             let scid = tx.scdata.get_hash("SC_ID").unwrap_or([0u8; 32]);
             let entry = tx.scdata.get_string("entrypoint").ok_or("no entrypoint provided")?;
             entrypoint = entry;
@@ -390,7 +404,16 @@ pub fn process_transaction_sc(
     // NoSigner bit), matching Go where the wrapper wraps the caller's tree
     // directly.
     let meta_key = sc_meta_key(&scid);
-    if let Some(v) = w_sc_tree.tree.get(&meta_key) {
+    if let Some(mut v) = w_sc_tree.get(&meta_key) {
+        // Go sets meta.DataHash = the SCID data tree's hash in the commit
+        // phase (blockchain.go:983/991: meta.DataHash = v.Hash()). Without
+        // it the SC_META entry bytes diverge from the chain's.
+        if let Some(data_tree) = cache.get(&scid) {
+            let dh = data_tree.hash();
+            if v.len() == 33 {
+                v[1..].copy_from_slice(&dh);
+            }
+        }
         sc_meta.put(&meta_key, &v);
     }
     Ok(fees)

@@ -124,6 +124,19 @@ pub fn execute_sc_function(
         return Err("Discarded knowingly".into());
     }
 
+    // flush the DVM's STORE writes (TXStorage.raw_keys) into the data tree.
+    // Go: the interpreter's StoreSCValue writes go through the same wrapper,
+    // so every STORE lands in the SC data tree (key = DataKey marshal with
+    // the trailing type byte, value = Variable marshal).
+    for (k, v) in state.store.raw_keys.iter() {
+        let kb = k.as_bytes();
+        if v.is_empty() {
+            data_tree.tree.delete(kb);
+        } else {
+            data_tree.tree.put(kb, v);
+        }
+    }
+
     // commit the wrapped data tree entries
     for (k, v) in data_tree.entries.iter() {
         if v.is_empty() {

@@ -377,6 +377,31 @@ impl Tree {
     pub fn hash(&self) -> [u8; 32] {
         self.root.hash()
     }
+
+    /// Debug: dump all leaf (key, value) pairs (oracle diagnostics).
+    pub fn debug_dump(&self) -> Vec<u8> {
+        fn walk(node: &Node, out: &mut Vec<u8>) {
+            match node {
+                Node::Leaf { key, value, .. } => {
+                    out.extend_from_slice(&(key.len() as u32).to_be_bytes());
+                    out.extend_from_slice(key);
+                    out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+                    out.extend_from_slice(value);
+                }
+                Node::Inner { left, right, .. } => {
+                    if let Some(l) = left {
+                        walk(l, out);
+                    }
+                    if let Some(r) = right {
+                        walk(r, out);
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.root, &mut out);
+        out
+    }
 }
 
 impl Default for Tree {

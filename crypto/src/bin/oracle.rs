@@ -937,9 +937,22 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "tx_deserialize" => {
                 let b = hex_decode(&s("bytes")?)?;
                 let tx = dero_crypto::transaction::Transaction::deserialize(&b, 3)?;
+                let payload_scids: Vec<String> = tx
+                    .payloads
+                    .iter()
+                    .map(|p| hex::encode(&p.scid))
+                    .collect();
+                // serialize with the statement's OWN bpp (wallet txs use 2)
+                let sbpp = tx
+                    .payloads
+                    .first()
+                    .map(|p| p.statement.bpp())
+                    .unwrap_or(3);
                 Ok(json!({
-                    "bytes": hex::encode(tx.serialize(3)),
-                    "hash": hex::encode(tx.get_hash(3)),
+                    "bytes": hex::encode(tx.serialize(sbpp)),
+                    "hash": hex::encode(tx.get_hash(sbpp)),
+                    "payload_scids": payload_scids,
+                    "txtype": tx.tx_type,
                 }))
             }
             "block_serialize" => {
@@ -1004,22 +1017,43 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 // 1) the block's non-coinbase txs (balance moves + fees)
                 // the block blob's txs are NOT embedded — the block header
                 // only hashes them. The harness passes tx blobs separately.
-                // For miner-only blocks (no tx_hashes), this is a no-op.
-                // 2) the miner tx (rewards)
+                // SC txs also run process_transaction_sc (SC_META + SCID
+                // data tree writes) — the SC_META root joins the XOR.
                 let mut fees = 0u64;
+                let mt = grav_tree_mut("M"); // persistent SC_META tree
                 if let Some(txblobs) = inp.get("txs").and_then(|v| v.as_array()) {
                     for tb in txblobs {
                         let hexb = tb.as_str().ok_or("tx hex")?;
                         let raw = hex_decode(hexb)?;
                         let tx = dero_crypto::transaction::Transaction::deserialize(&raw, 3)?;
                         fees += chain::process_transaction(&mut std::collections::HashMap::new(), &tx, bt, height, true);
+                        if tx.tx_type == dero_crypto::transaction::TX_SC {
+                            // process_transaction_sc: install/call + SC_META
+                            // + SCID data tree writes
+                            let mut cache = std::collections::HashMap::new();
+                            let mut ss = dero_crypto::sc::Snapshot { trees: std::collections::HashMap::new() };
+                            let blid = bl.get_hash();
+                            let r = chain::process_transaction_sc(
+                                &mut cache, &mut ss, bt, mt, height, height, 0,
+                                &blid, &tx, Some(0), // K0 floor: active from height 0 in simulator
+                            );
+                            if let Err(e) = &r {
+                                eprintln!("SC apply err: {}", e);
+                            }
+                            // expose the SCID data-tree hash for the harness
+                            let txid = tx.get_hash(tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(3));
+                            if let Some(dt) = cache.get(&txid) {
+                                eprintln!("SC data tree hash: {}", hex::encode(dt.hash()));
+                                eprintln!("SC data tree dump: {}", hex::encode(dt.debug_dump()));
+                            }
+                        }
                     }
                 }
                 chain::process_miner_transaction(
                     &bl.miner_tx.miner_address, bl.miner_tx.value,
                     &bl.mini_blocks, genesis, bt, fees, height,
                 );
-                Ok(json!({"hash": hex::encode(bt.hash())}))
+                Ok(json!({"hash": hex::encode(bt.hash()), "meta_hash": hex::encode(mt.hash())}))
             }
             "tx_build_valid" => {
                 let tx = build_valid_tx(inp)?;
