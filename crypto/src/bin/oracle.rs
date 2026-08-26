@@ -683,6 +683,113 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let pk = g.mul_bigint(fr.into_bigint());
                 Ok(json!({"public": hex::encode(dero_crypto::curve::encode_compressed(&pk))}))
             }
+            "wallet_build_tx" => {
+                // build a NORMAL transfer with the Rust wallet builder.
+                // Input: words, dest (bech32), amount, ring (bech32 ring
+                // order), ring_balances (encrypted balance hex per member),
+                // height, blid.
+                let words = s("words")?;
+                let words_vec: Vec<String> = words.split_whitespace().map(|w| w.to_string()).collect();
+                let seed = dero_crypto::mnemonics::words_to_key(&words_vec)?;
+                // sender secret = seed (big-endian scalar)
+                let mut le = [0u8; 32];
+                for i in 0..32 {
+                    le[i] = seed[31 - i];
+                }
+                let secret = ark_bn254::Fr::from_le_bytes_mod_order(&le);
+
+                let dest = s("dest")?;
+                let amount: u64 = s("amount")?.parse().map_err(|e| format!("amount: {e}"))?;
+                let height: u64 = s("height")?.parse().map_err(|e| format!("height: {e}"))?;
+                let max_bits: usize = s("max_bits")?.parse().map_err(|e| format!("max_bits: {e}"))?;
+                let blid_hex = s("blid")?;
+                let mut blid = [0u8; 32];
+                blid.copy_from_slice(&hex_decode(&blid_hex)?);
+                let rh_hex = s("roothash")?;
+                let mut roothash = [0u8; 32];
+                roothash.copy_from_slice(&hex_decode(&rh_hex)?);
+                let ring: Vec<String> = s("ring")?.split(',').map(|x| x.to_string()).collect();
+                let ring_bal: Vec<String> = s("ring_balances")?.split(',').map(|x| x.to_string()).collect();
+                let wi0: usize = s("wi0")?.parse().map_err(|e| format!("wi0: {e}"))?;
+                let wi1: usize = s("wi1")?.parse().map_err(|e| format!("wi1: {e}"))?;
+                let dest_key_hex = s("dest_key")?;
+                // ring members: self at wi0, receiver at wi1 — each member's
+                // pubkey comes from its bech32 address (self's derived key)
+                let mut members: Vec<dero_crypto::tx_builder::RingMember> = Vec::new();
+                let g = dero_crypto::hash_to_point::base_g();
+                let self_pk = g.mul_bigint(secret.into_bigint());
+                let self_comp = dero_crypto::curve::encode_compressed(&self_pk);
+                let mut i = 0;
+                for (addr, balhex) in ring.iter().zip(ring_bal.iter()) {
+                    let b = hex_decode(balhex)?;
+                    let ebal = dero_crypto::elgamal::ElGamal::deserialize(&b)
+                        .map_err(|e| format!("elgamal: {e}"))?;
+                    let pk: [u8; 33] = if i == wi0 {
+                        self_comp
+                    } else if i == wi1 && !dest_key_hex.is_empty() {
+                        let mut a = [0u8; 33];
+                        let db = hex_decode(&dest_key_hex)?;
+                        a.copy_from_slice(&db);
+                        a
+                    } else {
+                        let comp = dero_crypto::rpc_addr::address_to_compressed(addr)
+                            .map_err(|e| format!("addr: {e}"))?;
+                        let mut a = [0u8; 33];
+                        a.copy_from_slice(&comp);
+                        a
+                    };
+                    members.push(dero_crypto::tx_builder::RingMember { public_key: pk, balance: ebal });
+                    i += 1;
+                }
+                // ring order: Go's statement order — self must be at position
+                // 0 (witness_index[0]) and receiver at 1. The ring input from
+                // the harness is already Go's ring_order.
+                let tx = dero_crypto::tx_builder::build_transaction(
+                    &[dero_crypto::tx_builder::Transfer {
+                        destination: dest.clone(),
+                        amount,
+                        burn: 0,
+                        scid: [0u8; 32],
+                        payload_rpc: Vec::new(),
+                    }],
+                    &[members],
+                    wi0, wi1,
+                    &blid,
+                    height,
+                    &dero_crypto::rpc_args::Arguments::default(),
+                    &roothash,
+                    max_bits,
+                    0,  // fees placeholder
+                    &secret,
+                    &[0x5au8; 16384], // enough randomness for the proof draws (273 × 32)
+                )?;
+                Ok(json!({"tx": hex::encode(tx.serialize(3))}))
+            }
+            "calc_r_debug" => {
+                // compute r = ReducedHash(HashToPoint("DERO"||roothash||pubkeys) * secret)
+                // for debugging the wallet tx differential
+                let rh = hex_decode(&s("roothash")?)?;
+                let mut roothash = [0u8; 32];
+                roothash.copy_from_slice(&rh);
+                let pubs: Vec<String> = s("pubkeys")?.split(',').map(|x| x.to_string()).collect();
+                let mut pts = Vec::new();
+                for h in &pubs {
+                    let b = hex_decode(h)?;
+                    pts.push(dero_crypto::curve::decode_compressed(&b)?);
+                }
+                let secret_hex = s("secret")?;
+                let mut le = [0u8; 32];
+                let sb = hex_decode(&secret_hex)?;
+                for i in 0..32 {
+                    le[i] = sb[31 - i];
+                }
+                let secret = ark_bn254::Fr::from_le_bytes_mod_order(&le);
+                let r = dero_crypto::wallet::calc_r(&roothash, &pts, &secret);
+                let mut out = [0u8; 32];
+                let be = dero_crypto::wallet::fr_to_be32(r);
+                out.copy_from_slice(&be);
+                Ok(json!({"r": hex::encode(out)}))
+            }
             "keccak256" | "keccak512" => {
                 let data = hex_decode(&s("data")?)?;
                 let out = if op == "keccak256" {
@@ -695,6 +802,17 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "base_g" => {
                 let p = hash_to_point::base_g();
                 Ok(json!({"point": hex::encode(encode_compressed(&p))}))
+            }
+            "elgamal_deserialize" => {
+                let data = hex_decode(&s("data")?)?;
+                // 66-byte ElGamal (Left 33 + Right 33)
+                if data.len() != 66 {
+                    return Err(format!("need 66 bytes, got {}", data.len()));
+                }
+                let left = decode_compressed(&data[..33]).map_err(|e| format!("left: {e}"))?;
+                let right = decode_compressed(&data[33..]).map_err(|e| format!("right: {e}"))?;
+                Ok(json!({"left": hex::encode(encode_compressed(&left)),
+                          "right": hex::encode(encode_compressed(&right))}))
             }
             "pedersen_gparams" => {
                 let p = pedersen::generator_params(128);

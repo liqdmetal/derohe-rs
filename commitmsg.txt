@@ -1,16 +1,19 @@
-feat(wallet): mnemonic + key derivation — Rust reconstructs the simnode wallet
+feat(wallet): Rust tx builder — structural byte-match with Go, r verified
 
-- mnemonics.rs: clean-room DERO recovery-words derivation (24 words →
-  32-byte seed via the 3-words→4-bytes base-1626 mapping; 25th-word
-  crc32 checksum verify; English wordlist extracted from reference).
-- oracle op mnemonic_to_key: differential-verified against the Go
-  walletapi/mnemonics — byte-identical for the simnode's wsrc seed
-  (b0ef6bd5...).
-- oracle op pubkey_from_seed: secret×G where G = HashToPoint("DEROG")
-  (the DERO wallet base point, NOT the curve generator) and the seed is
-  interpreted as a big-endian integer like Go's big.Int — byte-identical
-  to the on-chain wsrc registration (09d704fe...).
+The Rust wallet builder (tx_builder.rs + wallet.rs) now produces a
+complete NORMAL transfer byte-identical in STRUCTURE to the Go wallet:
 
-The Rust wallet now derives the exact keys of the simnode's source
-wallet from its recovery words — the keys that hold the on-chain
-balance, ready for the transfer builder.
+- tx length 2562 = 2562 (statement layout, pointers, bpp all match)
+- statement: power=3 bpp=2, D at 220, 16-byte pointers (blake2s), C at
+  269, roothash — all at identical offsets
+- deterministic r: VERIFIED byte-identical Go vs Rust
+  (calc_r_debug differential, after fixing curve_order to the group
+  order r = 30644e...000001, not the field modulus p)
+- witness indices recovered from Go's statement (sender/receiver
+  positions), parity constraint enforced
+- XChaCha20 keystream verified byte-identical to golang.org/x/crypto
+
+Remaining: the encrypted RPCPayload's first/last byte differ (shared
+secret receiver-key nuance) — a 2-byte diff in a 145-byte encrypted
+region; everything else matches. The wallet helper suite is complete:
+mnemonic, keygen, shared secret, user-data encrypt, calc_r/calc_u.

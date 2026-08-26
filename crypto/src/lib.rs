@@ -26,7 +26,9 @@ pub mod pointvector;
 pub mod polynomial;
 pub mod rpc_args;
 pub mod statement;
+pub mod wallet;
 pub mod transaction;
+pub mod tx_builder;
 pub mod rpc_addr;
 pub mod sc;
 

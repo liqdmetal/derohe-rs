@@ -952,6 +952,43 @@ func handle(id int, op string, raw json.RawMessage) {
 	}
 
 	switch op {
+	case "calc_r_debug":
+		rhStr, _ := s(in, "roothash")
+		roothash, err := unhex(rhStr)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		pubsStr, _ := s(in, "pubkeys")
+		pubs := strings.Split(pubsStr, ",")
+		var pts []*bn256.G1
+		for _, h := range pubs {
+			b, e := unhex(h)
+			if e != nil {
+				fail(id, e)
+				return
+			}
+			var p bn256.G1
+			if e := p.DecodeCompressed(b); e != nil {
+				fail(id, e)
+				return
+			}
+			pts = append(pts, &p)
+		}
+		secretStr, _ := s(in, "secret")
+		secret, err := unhex(secretStr)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		// rinputs = roothash + pubkeys, then HashToPoint(HashtoNumber("DERO"+rinputs)) * secret
+		rinputs := append([]byte{}, roothash...)
+		for _, p := range pts {
+			rinputs = append(rinputs, p.EncodeCompressed()...)
+		}
+		renc := new(bn256.G1).ScalarMult(crypto.HashToPoint(crypto.HashtoNumber(append([]byte(crypto.PROTOCOL_CONSTANT), rinputs...))), new(big.Int).SetBytes(secret))
+		r := crypto.ReducedHash(renc.EncodeCompressed())
+		ok(id, map[string]interface{}{"r": fmt.Sprintf("%x", r.Bytes())})
 	case "mnemonic_to_key":
 		words, err := s(in, "words")
 		if err != nil {
