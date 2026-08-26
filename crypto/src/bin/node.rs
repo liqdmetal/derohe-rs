@@ -49,6 +49,9 @@ struct ChainStore {
     /// referencing a recent blid can be verified against the state they
     /// were built on (the live trees advance every mined block)
     recent: VecDeque<(u64, [u8; 32], Tree, Tree)>,
+    /// per-SCID token balance trees (the SCID names a separate tree in the
+    /// reference; maintained as SC txs execute)
+    token_trees: HashMap<[u8; 32], Tree>,
     height: u64,
     k0_floor: Option<u64>,
 }
@@ -64,6 +67,7 @@ impl ChainStore {
             sc_meta: Tree::new("SC_META"),
             genesis_snapshot: None,
             recent: VecDeque::new(),
+            token_trees: HashMap::new(),
             height: 0,
             k0_floor: Some(0), // simulator: K0 active from height 0
         }
@@ -594,6 +598,17 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
             };
             let dest = params["dest"].as_str().unwrap_or("");
             let amount: u64 = params["amount"].as_u64().unwrap_or(0);
+            // multi-asset: params.scid (hex) -> transfer a TOKEN
+            let mut scid = [0u8; 32];
+            let scid_hex = params["scid"].as_str().unwrap_or("");
+            let has_scid = !scid_hex.is_empty();
+            if has_scid {
+                let b = match hex_decode(scid_hex.trim_start_matches("0x")) {
+                    Ok(b) if b.len() == 32 => b,
+                    _ => return json_err_id(-32000, "bad scid (need 32 bytes hex)", id),
+                };
+                scid.copy_from_slice(&b);
+            }
             // SC install: params.sc_code present -> SC_ACTION=1 + SC_CODE
             let sc_code = params["sc_code"].as_str().unwrap_or("");
             let is_sc = !sc_code.is_empty();
@@ -604,7 +619,10 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
             if !is_sc && self_addr == dest_comp {
                 return json_err_id(-32000, "cannot send to self", id);
             }
-            // ring = [self, dest, others] — all distinct, from the tree
+            // ring = [self, dest, others] — all distinct, from the tree.
+            // For a TOKEN transfer the ring comes from the TOKEN's balance
+            // tree (scid != 0): we fall back to the base tree for members,
+            // but fetch balances from the token tree when present.
             let mut ring_members: Vec<[u8; 33]> = vec![self_addr, dest_comp];
             // SC installs use ring size 4 (like the reference wallet)
             let ring_size = if is_sc { 4 } else { 8 };
@@ -625,12 +643,14 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
             if ring_members.len() < ring_size {
                 return json_err_id(-32000, &format!("need {ring_size} ring members, got {}", ring_members.len()), id);
             }
-            // balances from the tree + BSGS decode for self
+            // balances from the tree + BSGS decode for self. For a TOKEN
+            // transfer (scid != 0) the balances come from the token's own
+            // SC data tree (keyed by the SCID's wrapped tree).
             let mut ring: Vec<RingMember> = Vec::new();
             for (i, k) in ring_members.iter().enumerate() {
-                let nb = st
-                    .balance
-                    .get(k)
+                let nb = (if has_scid { st.token_trees.get(&scid) } else { None })
+                    .and_then(|t| t.get(k))
+                    .or_else(|| st.balance.get(k))
                     .and_then(|v| NonceBalance::deserialize(&v).ok())
                     .map(|n| n.balance)
                     .unwrap_or_else(|| {
@@ -658,7 +678,7 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 destination: dest.to_string(),
                 amount,
                 burn: 0,
-                scid: [0u8; 32],
+                scid, // token SCID (zero = base asset)
                 payload_rpc: Vec::new(),
             }];
             // SC install: SC_ACTION=1 (SC_INSTALL) + SC_CODE

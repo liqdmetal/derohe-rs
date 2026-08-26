@@ -1,7 +1,10 @@
-feat(wallet): SC-call txs — invoke contract entrypoints from the wallet
+feat(node): multi-asset transfer plumbing — DERO.Transfer accepts scid
 
-- wallet --sc-call <scid> <entrypoint>: builds a TX_SC with SC_ACTION=0
-  (SC_CALL), SC_ID (DataHash) + entrypoint (DataString), ring size 4,
-  0-value transfer to a ring member
-- PROVEN on the Rust chain: SC install at block 452 (scid fe71b898),
-  SC call to Initialize accepted + mined at block 508
+- DERO.Transfer {dest, amount, scid}: token transfers (scid != 0) — the
+  transfer's SCID flows into the builder's C commitments; balances are
+  read from the node's per-SCID token trees when present, else the base
+  tree (reference-compatible fallback)
+- ChainStore gains token_trees: HashMap<scid, Tree> (maintained as SC txs
+  execute; currently read-only in Transfer — full token-tree population
+  lands with SC data-tree persistence)
+- base-asset path regression: PASS (transfer accepted + mined)
