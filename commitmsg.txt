@@ -1,8 +1,13 @@
-feat(node): disk persistence — --data-dir survives restarts
+feat(node): real DERO P2P protocol — block sync over the wire protocol
 
-- --data-dir DIR: the node persists balance + sc_meta trees, every block
-  blob, txids, and raw tx blobs as JSONL after each applied block
-- on start: load the persisted state (trees + blocks), then sync
-  incrementally from peers (only blocks above the stored height)
-- PROVEN: node mined to h49 -> killed -> restarted -> "loaded 50 blocks
-  from ... (height 49)", "synced 0 blocks", continued mining at h50
+- crypto/src/p2p.rs: the DERO peer wire format (clean-room port of
+  p2p/wire_structs.go + rpc_cbor_codec.go): 4-byte LE length framing,
+  CBOR-tagged structs, two-frame rpc2 messages (header {M,S,E} then
+  object)
+- node --p2p-port N: serves Peer.Chain (block hash list) + Peer.GetObject
+  (block bodies) to other nodes — the real derohe sync subset
+- node --p2p-peer host:port: pulls blocks over the wire protocol
+  (incremental, skips already-applied blocks)
+- PROVEN: node A mines with --p2p-port; node B syncs via --p2p-peer
+  ONLY (no HTTP): "p2p pulled 10 blocks", then "5 blocks" — B tracks A's
+  chain live at height 41 over the real DERO wire protocol

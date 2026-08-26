@@ -23,6 +23,7 @@ pub mod hash_to_point;
 pub mod innerproduct;
 pub mod keccak;
 pub mod mnemonics;
+pub mod p2p;
 pub mod pedersen;
 pub mod pointvector;
 pub mod polynomial;
