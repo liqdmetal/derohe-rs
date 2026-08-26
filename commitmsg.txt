@@ -1,16 +1,15 @@
-feat(harness): mainnet dry-run + submit — real txs accepted by the live node
+feat(wallet): wallet state layer — history tracking + scan classification
 
-- dryrun_mainnet.py: read-only build against live mainnet state (ring,
-  balances, roothash from the public node); txid byte-identical Go==Rust
-- submit_mainnet.py: builds and BROADCASTS a real dust tx via
-  DERO.SendRawTransaction; the daemon ACCEPTED it twice
-  (status OK, txid returned) — the Rust wallet's tx passes the live
-  mainnet mempool verifier
-- oracle: new ops balance_decode (BSGS) + proof_verify_tx
-- KEY FINDING: mainnet wallet txs use bpp=3 (max_bits=24, 24-bit
-  pointers), NOT the simnode's bpp=2 — the pointer-length mismatch was
-  the "leaf not found" root cause
-- also: roothash+blid must come from ONE consistent state fetch
-  (mismatched pairs caused nonce-verification failures)
-- TX_VALIDITY_HEIGHT = 11: the tx must reference tip-3 (inside the
-  window) or it expires in the mempool
+- NEW crypto/src/wallet_state.rs: clean-room port of the reference
+  wallet's transaction tracking (walletapi/wallet.go + the scan loop):
+  - Entry: height/topoheight/txpos/pos/blockhash/txid/amount/fees/
+    burn/incoming/coinbase/status/ring_member
+  - WalletState: per-SCID sorted entries (Go InsertReplace semantics),
+    Show_Transfers filtering, mature+locked balance cache
+  - process_tx_change: homomorphic classification
+    (ring member / outgoing / incoming) from the ElGamal balance delta
+  - find_our_pos / tx_touches_us: locate the wallet in a ring
+- oracle op wallet_scan_tx: classify a tx blob for the wallet (prev
+  balance reconstructed from CLn/CRn when present, or via ring)
+- tests: classify_in_out_ring (3-way classification + find_our_pos),
+  insert_replace_sorted (Go rescan semantics) — 68/68 total

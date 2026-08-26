@@ -1034,6 +1034,83 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 }
                 Ok(json!({"ok": all_ok}))
             }
+            "wallet_scan_tx" => {
+                // classify one tx for our wallet (wallet_state scan)
+                let b = hex_decode(&s("blob")?)?;
+                let tx = dero_crypto::transaction::Transaction::deserialize(&b, 2)
+                    .or_else(|_| dero_crypto::transaction::Transaction::deserialize(&b, 3))
+                    .map_err(|e| format!("deserialize: {e}"))?;
+                let words: Vec<String> = s("words")?
+                    .split_whitespace()
+                    .map(|w| w.to_string())
+                    .collect();
+                let seed = dero_crypto::mnemonics::words_to_key(&words)
+                    .map_err(|e| format!("words: {e}"))?;
+                let mut le = [0u8; 32];
+                for i in 0..32 {
+                    le[i] = seed[31 - i];
+                }
+                let secret = ark_bn254::Fr::from_le_bytes_mod_order(&le);
+                let sender = dero_crypto::hash_to_point::base_g()
+                    .mul_bigint(secret.into_bigint());
+                let our_key = dero_crypto::curve::encode_compressed(&sender);
+                let height: u64 = s("height")?.parse().map_err(|e| format!("height: {e}"))?;
+                let topoheight: u64 = s("topoheight")?.parse().map_err(|e| format!("topo: {e}"))?;
+                // optional expanded ring: JSON array of compressed keys per payload
+                let mut entries_out: Vec<serde_json::Value> = Vec::new();
+                for (ti, p) in tx.payloads.iter().enumerate() {
+                    let st = &p.statement;
+                    if st.publickeylist.is_empty() {
+                        continue;
+                    }
+                    // our position
+                    let pos = match dero_crypto::wallet_state::find_our_pos(st, &our_key) {
+                        Some(x) => x,
+                        None => continue,
+                    };
+                    // prev balance: fetch from the node? we can't here — the
+                    // oracle has no RPC. Instead: decode the CURRENT balance
+                    // from the statement CLn/CRn (cln[pos] - C[pos] = ebal.left
+                    // at tx time) and compute the change directly.
+                    // changed = cln[pos] - C[pos] + C[pos]... simpler: the
+                    // change IS the delta we can read from C[pos]/D against
+                    // our secret: value = decode(cln[pos] - C[pos]... )
+                    // We reconstruct: prev_ebal.left = cln[pos] - C[pos],
+                    // prev_ebal.right = crn[pos] - D.
+                    let prev_left = st.cln.get(pos).copied().unwrap_or_default()
+                        - st.c.get(pos).copied().unwrap_or_default();
+                    let prev_right = st.crn.get(pos).copied().unwrap_or_default()
+                        - st.d;
+                    let prev_ebal = dero_crypto::elgamal::ElGamal::new(prev_left, prev_right);
+                    // changed = prev + changes
+                    let changes = dero_crypto::elgamal::ElGamal::new(st.c[pos], st.d);
+                    let changed_e = prev_ebal.add(&changes);
+                    let prev_v = dero_crypto::wallet::decode_balance(&prev_ebal, &secret, 44).unwrap_or(0);
+                    let changed_v = dero_crypto::wallet::decode_balance(&changed_e, &secret, 44).unwrap_or(0);
+                    let fees = st.fees;
+                    let (incoming, status, amount) = if prev_v == changed_v {
+                        (false, 0, 0) // ring member
+                    } else if prev_v > changed_v {
+                        (false, 1, prev_v - changed_v - fees) // out
+                    } else {
+                        (true, 0, changed_v - prev_v) // in
+                    };
+                    entries_out.push(serde_json::json!({
+                        "txid": hex::encode(tx.get_hash(st.bpp())),
+                        "height": height,
+                        "topoheight": topoheight,
+                        "txpos": ti,
+                        "pos": pos,
+                        "amount": amount,
+                        "fees": fees,
+                        "incoming": incoming,
+                        "status": status,
+                        "prev": prev_v,
+                        "changed": changed_v,
+                    }));
+                }
+                Ok(json!({"entries": entries_out}))
+            }
             "balance_decode" => {
                 // decode an ElGamal balance with the wallet secret (BSGS)
                 let bal_b = hex_decode(&s("balance")?)?;
