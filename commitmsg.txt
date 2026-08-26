@@ -1,12 +1,7 @@
-feat(wallet): full wallet scan — history tracking over the chain
+feat(wallet): SC-call txs — invoke contract entrypoints from the wallet
 
-- node GetTransaction now serves the EXPANDED ring (bech32 per payload)
-  + block_height/tx_hash/valid_block, reference-compatible
-- oracle wallet_scan_tx: accepts the served ring, expands the statement's
-  publickeylist, finds our key, reconstructs the prev balance from
-  CLn/CRn, classifies IN/OUT/ring-member with amount + fees
-- node mining loop: REMOVE included txs from the mempool (they were being
-  re-included in every block — the wallet saw the same tx per block)
-- harness/scan_wallet2.py: full-chain wallet scan
-- PROVEN: 1 transfer -> exactly 1 history entry
-  (h28 OUT amt=5 fees=121 prev=126->0)
+- wallet --sc-call <scid> <entrypoint>: builds a TX_SC with SC_ACTION=0
+  (SC_CALL), SC_ID (DataHash) + entrypoint (DataString), ring size 4,
+  0-value transfer to a ring member
+- PROVEN on the Rust chain: SC install at block 452 (scid fe71b898),
+  SC call to Initialize accepted + mined at block 508

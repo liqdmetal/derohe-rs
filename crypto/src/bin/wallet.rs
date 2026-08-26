@@ -10,7 +10,7 @@ use dero_crypto::elgamal::ElGamal;
 use dero_crypto::hash_to_point::base_g;
 use dero_crypto::mnemonics::words_to_key;
 use dero_crypto::rpc_addr::address_to_compressed;
-use dero_crypto::rpc_args::{Argument, ArgValue, Arguments, DATA_STRING, DATA_UINT64, SC_ACTION, SC_CODE};
+use dero_crypto::rpc_args::{Argument, ArgValue, Arguments, DATA_HASH, DATA_STRING, DATA_UINT64, SC_ACTION, SC_CODE};
 use dero_crypto::tx_builder::{build_transaction, RingMember, Transfer};
 use dero_crypto::wallet::{calc_r, generate_shared_secret, reduced_hash};
 use ark_bn254::Fr;
@@ -22,13 +22,21 @@ fn main() {
     if args.len() < 5 {
         eprintln!("usage: wallet.exe <words> <dest> <amount> <daemon>");
         eprintln!("       wallet.exe <words> --sc-install <code> <daemon>");
+        eprintln!("       wallet.exe <words> --sc-call <scid> <entrypoint> [args] <daemon>");
         std::process::exit(1);
     }
     let words = &args[1];
     let sc_install = args.len() >= 5 && args[2] == "--sc-install";
-    let dest = if sc_install { String::new() } else { args[2].clone() };
-    let amount: u64 = if sc_install { 0 } else { args[3].parse().expect("amount") };
-    let daemon = if sc_install { args[4].clone() } else { args[4].clone() };
+    let sc_call = args.len() >= 6 && args[2] == "--sc-call";
+    let dest = if sc_install || sc_call { String::new() } else { args[2].clone() };
+    let amount: u64 = if sc_install || sc_call { 0 } else { args[3].parse().expect("amount") };
+    // --sc-call <scid> <entrypoint> <daemon>: args[3]=scid, [4]=entrypoint, [5]=daemon
+    let (sc_scid, sc_entrypoint) = if sc_call {
+        (args[3].clone(), args[4].clone())
+    } else {
+        (String::new(), String::new())
+    };
+    let daemon = if sc_call { args[5].clone() } else { args[4].clone() };
     let sc_code = if sc_install { args[3].clone() } else { String::new() };
 
     // 1. derive the wallet keys
@@ -60,9 +68,9 @@ fn main() {
         .unwrap_or_else(|_| ring_addrs[0].clone());
     println!("self addr: {}", self_addr.chars().take(24).collect::<String>());
     // ring = [self, (dest or a random member), others] — ALL DISTINCT keys.
-    // SC installs use ring size 4 (like the reference).
-    let ring_size = if sc_install { 4 } else { 8 };
-    let dest_for_ring = if sc_install {
+    // SC installs AND calls use ring size 4 (like the reference).
+    let ring_size = if sc_install || sc_call { 4 } else { 8 };
+    let dest_for_ring = if sc_install || sc_call {
         ring_addrs
             .iter()
             .find(|a| *a != &self_addr)
@@ -199,11 +207,26 @@ fn main() {
         scid: [0u8; 32],
         payload_rpc: Vec::new(),
     }];
-    // SC install: SC_ACTION = 1 (SC_INSTALL), SC_CODE = the source
+    // SC install: SC_ACTION = 1 (SC_INSTALL), SC_CODE = the source.
+    // SC call:   SC_ACTION = 0 (SC_CALL), SC_ID (hash) + entrypoint (string)
     let scdata = if sc_install {
         Arguments(vec![
             Argument { name: SC_ACTION.to_string(), data_type: DATA_UINT64, value: ArgValue::U64(1) },
             Argument { name: SC_CODE.to_string(), data_type: DATA_STRING, value: ArgValue::Str(sc_code.clone()) },
+        ])
+    } else if sc_call {
+        let mut scid32 = [0u8; 32];
+        let scid_hex = sc_scid.trim_start_matches("0x");
+        let scid_bytes = hex::decode(scid_hex).expect("scid hex");
+        if scid_bytes.len() != 32 {
+            eprintln!("SCID must be 32 bytes");
+            std::process::exit(1);
+        }
+        scid32.copy_from_slice(&scid_bytes);
+        Arguments(vec![
+            Argument { name: SC_ACTION.to_string(), data_type: DATA_UINT64, value: ArgValue::U64(0) },
+            Argument { name: "SC_ID".to_string(), data_type: DATA_HASH, value: ArgValue::Hash(scid32) },
+            Argument { name: "entrypoint".to_string(), data_type: DATA_STRING, value: ArgValue::Str(sc_entrypoint.clone()) },
         ])
     } else {
         Arguments::default()
