@@ -18,3 +18,7 @@ harness/phase_*_extra.json
 # built binaries
 bin/*.exe
 target/
+# node test data dirs
+nodetest-data/
+node-data/
+*.jsonl
