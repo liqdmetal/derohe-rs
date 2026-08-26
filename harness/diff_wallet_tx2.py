@@ -80,6 +80,9 @@ rust_in = {
         'max_bits': str(go_max_bits),
         'wi0': str(wi0),
         'wi1': str(wi1),
+        # the sender's decrypted balance (the witness needs it) — from the
+        # simnode's wallet (holds wsrc's secret)
+        'balance': str(rpc('DERO.GetBalance', {'address': ring_order[wi0]})['result'].get('balance', 0)),
     },
 }
 p = subprocess.run([RUST], input=json.dumps(rust_in)+'\n',

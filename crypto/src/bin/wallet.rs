@@ -48,27 +48,10 @@ fn main() {
         eprintln!("need >= 8 ring members, got {}", ring_addrs.len());
         std::process::exit(1);
     }
-    // find the wallet's OWN address: the registered address whose compressed
-    // key matches the derived sender key
-    let regs: Vec<String> = json_rpc(daemon, "DERO.GetRegistrations", serde_json::json!({}))
-        .get("result")
-        .and_then(|r| r.get("addresses"))
-        .and_then(|a| a.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let sender_hex = hex::encode(sender_comp);
-    let mut self_addr = ring_addrs[0].clone();
-    for reg in &regs {
-        if reg.trim_start_matches("0x") == sender_hex {
-            // it's a compressed key; find its bech32 in ring_addrs
-            if let Some(a) = ring_addrs.iter().find(|a| {
-                address_to_compressed(a).map(|c| hex::encode(c) == sender_hex).unwrap_or(false)
-            }) {
-                self_addr = a.clone();
-                break;
-            }
-        }
-    }
+    // the wallet's own address: derive it directly from our key — no daemon
+    // matching needed (the daemon's random list may not include us)
+    let self_addr = dero_crypto::rpc_addr::compressed_to_address(&sender_comp)
+        .unwrap_or_else(|_| ring_addrs[0].clone());
     println!("self addr: {}", self_addr.chars().take(24).collect::<String>());
     // ring = [self, dest, others] — ALL DISTINCT by compressed key
     let mut ring_members: Vec<String> = vec![self_addr.clone(), dest.to_string()];
@@ -154,14 +137,15 @@ fn main() {
         });
     }
 
-    // the sender's DECRYPTED balance (via the daemon's wallet lookup) —
-    // needed for the witness; set it on the self member (index 0)
-    let bal_resp = json_rpc(daemon, "DERO.GetBalance", serde_json::json!({"address": self_addr}));
-    let self_balance = bal_resp
-        .get("result")
-        .and_then(|r| r.get("balance"))
-        .and_then(|b| b.as_u64())
-        .unwrap_or(0);
+    // the sender's DECRYPTED balance — decode it locally from the encrypted
+    // balance with our secret (BSGS; no daemon wallet needed)
+    let self_balance = match dero_crypto::wallet::decode_balance(&ring[0].balance, &secret, 44) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("decode self balance: {e}");
+            std::process::exit(1);
+        }
+    };
     ring[0].balance_decoded = self_balance;
     println!("self decrypted balance: {}", self_balance);
     // debug: print each ring member's pointer (graviton hash truncated to bpp)

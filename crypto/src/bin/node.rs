@@ -16,12 +16,14 @@
 //! its own blocks (AstroBWTv3 PoW; in simulator mode the PoW is skipped,
 //! matching the reference simulator).
 
-use dero_crypto::balance_serdes::uvarint_encode;
+use dero_crypto::balance_serdes::{uvarint_encode, NonceBalance};
 use dero_crypto::block::{sha3_256, Block, MiniBlock};
+use dero_crypto::bulletproof::{verify, Statement};
 use dero_crypto::chain;
+use dero_crypto::curve::decode_compressed;
 use dero_crypto::graviton::Tree;
 use dero_crypto::transaction::Transaction;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -38,6 +40,10 @@ struct ChainStore {
     balance: Tree,
     sc_meta: Tree,
     genesis_snapshot: Option<(Vec<(Vec<u8>, Vec<u8>)>, Vec<(Vec<u8>, Vec<u8>)>)>, // (balance, meta) at height 0
+    /// recent state snapshots (height, roothash, balance, sc_meta) so txs
+    /// referencing a recent blid can be verified against the state they
+    /// were built on (the live trees advance every mined block)
+    recent: VecDeque<(u64, [u8; 32], Tree, Tree)>,
     height: u64,
     k0_floor: Option<u64>,
 }
@@ -52,9 +58,29 @@ impl ChainStore {
             balance: Tree::new("BALANCE_TREE"),
             sc_meta: Tree::new("SC_META"),
             genesis_snapshot: None,
+            recent: VecDeque::new(),
             height: 0,
             k0_floor: Some(0), // simulator: K0 active from height 0
         }
+    }
+
+    /// Snapshot the current state (called after every applied block).
+    fn snapshot(&mut self) {
+        let rh = self.roothash();
+        self.recent.push_back((self.height, rh, self.balance.clone(), self.sc_meta.clone()));
+        while self.recent.len() > 64 {
+            self.recent.pop_front();
+        }
+    }
+
+    /// The balance tree at the state whose roothash matches `rh` (the tx's
+    /// referenced state), or None if too old.
+    fn balance_at_roothash(&self, rh: &[u8; 32]) -> Option<&Tree> {
+        self.recent
+            .iter()
+            .rev()
+            .find(|(_, r, _, _)| r == rh)
+            .map(|(_, _, b, _)| b)
     }
 
     fn roothash(&self) -> [u8; 32] {
@@ -282,6 +308,7 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result
         store.txids.push(block_txids);
         store.raw_txs.push(raw_txs);
         store.height = h;
+        store.snapshot();
         applied += 1;
     }
     Ok(applied)
@@ -304,6 +331,7 @@ fn seed_genesis(store: &mut ChainStore, peer: &str) -> Result<(), String> {
             store.sc_meta.put(&key, &val);
         }
     }
+    store.snapshot(); // the genesis state (txs referencing it resolve here)
     Ok(())
 }
 
@@ -313,20 +341,104 @@ fn seed_genesis(store: &mut ChainStore, peer: &str) -> Result<(), String> {
 
 struct Mempool {
     txs: HashMap<[u8; 32], Transaction>,
+    raw: HashMap<[u8; 32], Vec<u8>>, // original wire blob per txid
 }
 
 impl Mempool {
     fn new() -> Self {
-        Mempool { txs: HashMap::new() }
+        Mempool {
+            txs: HashMap::new(),
+            raw: HashMap::new(),
+        }
     }
-    fn add(&mut self, tx: Transaction) -> bool {
-        let h = tx.get_hash(3);
+    fn add(&mut self, tx: Transaction, raw: Vec<u8>) -> bool {
+        let bpp = tx
+            .payloads
+            .first()
+            .map(|p| p.statement.bpp())
+            .unwrap_or(2);
+        let h = tx.get_hash(bpp);
         if self.txs.contains_key(&h) {
             return false;
         }
+        self.raw.insert(h, raw);
         self.txs.insert(h, tx);
         true
     }
+}
+
+/// Expand a deserialized statement with the chain state: fill
+/// publickeylist (compressed keys from the balance tree) and CLn/CRn
+/// (ebalance.left + C[i], ebalance.right + D). This is exactly what the
+/// reference does before verifying a tx's proof.
+fn expand_statement(tree: &Tree, st: &mut Statement) -> Result<(), String> {
+    let bpp = st.bpp() as usize;
+    let ring = if bpp == 0 {
+        0
+    } else {
+        st.pointers.len() / bpp
+    };
+    st.publickeylist.clear();
+    st.cln.clear();
+    st.crn.clear();
+    for i in 0..ring {
+        let key_pointer = &st.pointers[i * bpp..(i + 1) * bpp];
+        let (key_compressed, balance_serialized) = tree
+            .get_key_value_from_hash(key_pointer)
+            .ok_or_else(|| format!("ring member {i} not in balance tree"))?;
+        let mut key = [0u8; 33];
+        if key_compressed.len() != 33 {
+            return Err("bad ring key length".into());
+        }
+        key.copy_from_slice(&key_compressed);
+        let nb = NonceBalance::deserialize(&balance_serialized)
+            .map_err(|e| format!("bad ring balance: {e}"))?;
+        st.publickeylist
+            .push(decode_compressed(&key).map_err(|e| format!("bad ring key: {e}"))?);
+        st.cln.push(nb.balance.left + st.c[i]);
+        st.crn.push(nb.balance.right + st.d);
+    }
+    Ok(())
+}
+
+/// Verify a raw tx against the node's state at the tx's referenced
+/// roothash (the way the reference mempool does: expand + Proof.Verify).
+/// Returns the txid.
+fn verify_raw_tx(store: &ChainStore, raw: &[u8]) -> Result<[u8; 32], String> {
+    let tx = Transaction::deserialize(raw, 2)
+        .or_else(|_| Transaction::deserialize(raw, 3))
+        .map_err(|e| format!("deserialize: {e}"))?;
+    let bpp = tx
+        .payloads
+        .first()
+        .map(|p| p.statement.bpp())
+        .unwrap_or(2);
+    let txid = tx.get_hash(bpp);
+    if tx.payloads.is_empty() {
+        return Err("tx has no payloads".into());
+    }
+    // the state the tx was built on: match the statement's roothash against
+    // the recent snapshots (the live trees advance every mined block)
+    let stmt_rh: [u8; 32] = tx.payloads[0]
+        .statement
+        .roothash
+        .try_into()
+        .map_err(|_| "bad roothash".to_string())?;
+    let state = store
+        .balance_at_roothash(&stmt_rh)
+        .ok_or_else(|| "tx references a state older than the snapshot window".to_string())?;
+    let mut scid_index_map: HashMap<[u8; 32], i32> = HashMap::new();
+    for (i, p) in tx.payloads.iter().enumerate() {
+        let proof = p.proof.as_ref().ok_or_else(|| format!("payload {i} has no proof"))?;
+        let mut stmt = p.statement.clone();
+        expand_statement(state, &mut stmt)?;
+        let index = *scid_index_map.get(&p.scid).unwrap_or(&0);
+        if !verify(&p.scid, index, &stmt, proof, &txid, p.burn_value) {
+            return Err(format!("payload {i} proof verification failed"));
+        }
+        scid_index_map.insert(p.scid, index + 1);
+    }
+    Ok(txid)
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +582,60 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
             "height": st.height,
             "tips": 1,
             "roothash": hex::encode(st.roothash()),
+            "network": "simulator",
+            "status": "OK",
+            "testnet": true,
+            "top_block_hash": st.blocks.last().map(|(b, _)| hex::encode(b.get_hash())).unwrap_or_else(|| hex::encode([0u8; 32])),
         }),
+        "DERO.GetEncryptedBalance" => {
+            // {address, scid, topoheight} -> the NonceBalance serialization
+            // from the node's own balance tree (pointer = blake2s(addr)[:3])
+            let addr = params["address"].as_str().unwrap_or("");
+            let comp = match dero_crypto::rpc_addr::address_to_compressed(addr) {
+                Ok(c) => c,
+                Err(_) => return json_err_id(-32000, "bad address", id),
+            };
+            let kh = dero_crypto::graviton::sum(&comp);
+            let status = match st.balance.get_key_value_from_hash(&kh[..3]) {
+                Some((_k, v)) => {
+                    serde_json::json!({
+                        "data": hex::encode(&v),
+                        "status": "OK",
+                        "topoheight": st.height as i64,
+                        "height": st.height,
+                        "treehash": hex::encode(st.roothash()),
+                        "blockhash": st.blocks.last().map(|(b, _)| hex::encode(b.get_hash())).unwrap_or_default(),
+                    })
+                }
+                None => serde_json::json!({
+                    "data": "",
+                    "status": "Account Unregistered",
+                    "topoheight": st.height as i64,
+                    "height": st.height,
+                    "treehash": hex::encode(st.roothash()),
+                    "blockhash": st.blocks.last().map(|(b, _)| hex::encode(b.get_hash())).unwrap_or_default(),
+                }),
+            };
+            status
+        }
+        "DERO.GetRandomAddress" => {
+            // serve the registered addresses (tree keys -> bech32); return
+            // up to 32 so wallets have enough distinct ring candidates
+            let mut addrs: Vec<String> = dero_crypto::graviton::tree_keys(&st.balance)
+                .iter()
+                .filter_map(|k| dero_crypto::rpc_addr::compressed_to_address(k).ok())
+                .collect();
+            addrs.sort();
+            addrs.truncate(32);
+            serde_json::json!({"address": addrs})
+        }
+        "DERO.GetRegistrations" => {
+            let keys: Vec<String> = dero_crypto::graviton::tree_keys(&st.balance)
+                .iter()
+                .map(|k| hex::encode(k))
+                .collect();
+            serde_json::json!({"addresses": keys})
+        }
         "DERO.GetBlock" => {
             let h = params["height"].as_i64().unwrap_or(0);
             if h < 0 || h as u64 > st.height {
@@ -574,9 +739,53 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 "meta_root": m_root, "meta_entries": meta})
         }
         "DERO.SubmitTX" => {
-            let tb = params["txs"].as_array().and_then(|a| a.get(0)).and_then(|t| t["tx"].as_str()).unwrap_or("");
-            let _ = tb;
-            serde_json::json!({"status": "ok"})
+            // accept both {"blob": "hex"} and {"txs": [{"tx": "hex"}]}
+            let blob_hex = params["blob"]
+                .as_str()
+                .or_else(|| {
+                    params["txs"].as_array().and_then(|a| a.get(0)).and_then(|t| t["tx"].as_str())
+                })
+                .unwrap_or("");
+            if blob_hex.is_empty() {
+                return json_err_id(-32000, "no tx blob", id);
+            }
+            let raw = match hex_decode(blob_hex) {
+                Ok(r) => r,
+                Err(_) => return json_err_id(-32000, "bad hex", id),
+            };
+            // chain-style verification: expand CLn/CRn + publickeylist from
+            // the node's balance tree, then verify each payload's proof
+            let txid = match verify_raw_tx(&st, &raw) {
+                Ok(t) => t,
+                Err(e) => return json_err_id(-32000, &format!("verification failed: {e}"), id),
+            };
+            let tx = match Transaction::deserialize(&raw, 2)
+                .or_else(|_| Transaction::deserialize(&raw, 3))
+            {
+                Ok(t) => t,
+                Err(e) => return json_err_id(-32000, &format!("deserialize: {e}"), id),
+            };
+            drop(st);
+            let mut mp = mempool.lock().unwrap();
+            if mp.add(tx, raw) {
+                serde_json::json!({"txid": hex::encode(txid), "status": "OK"})
+            } else {
+                return json_err_id(-32000, "tx already in pool", id);
+            }
+        }
+        "DERO.CheckTxHash" => {
+            let blob_hex = params["blob"].as_str().unwrap_or("");
+            let raw = match hex_decode(blob_hex) {
+                Ok(r) => r,
+                Err(_) => return json_err_id(-32000, "bad hex", id),
+            };
+            match Transaction::deserialize(&raw, 2).or_else(|_| Transaction::deserialize(&raw, 3)) {
+                Ok(tx) => {
+                    let bpp = tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(2);
+                    serde_json::json!({"txid": hex::encode(tx.get_hash(bpp)), "status": "OK"})
+                }
+                Err(e) => return json_err_id(-32000, &format!("deserialize: {e}"), id),
+            }
         }
         _ => return json_err_id(-32601, "method not found", id),
     };
@@ -676,6 +885,7 @@ fn main() {
     let mut peer = "http://127.0.0.1:25000/json_rpc".to_string();
     let mut port: u16 = 26000;
     let mut mine = false;
+    let mut mine_interval_ms: u64 = 2000;
     let mut simulator = true; // simulator mode: skip proof verification (matches reference simnode laxity)
     let mut miner_addr = String::new();
     let mut i = 1;
@@ -684,6 +894,7 @@ fn main() {
             "--peer" => { i += 1; peer = args[i].clone(); }
             "--port" => { i += 1; port = args[i].parse().unwrap_or(26000); }
             "--mine" => mine = true,
+            "--mine-interval-ms" => { i += 1; mine_interval_ms = args[i].parse().unwrap_or(2000); }
             "--miner" => { i += 1; miner_addr = args[i].clone(); }
             "--mainnet" => simulator = false, // verify proofs strictly
             "--help" => {
@@ -728,7 +939,7 @@ fn main() {
         };
         let miner = Miner { address: addr, simulator: true };
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            std::thread::sleep(std::time::Duration::from_millis(mine_interval_ms));
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -762,9 +973,10 @@ fn main() {
                     };
                     st.blocks.push((blk.clone(), txs));
                     st.roothashes.push(rh);
+                    st.height = blk.height;
+                    st.snapshot();
                     st.txids.push(blk.tx_hashes.clone());
                     st.raw_txs.push(Vec::new()); // mined txs: raw = re-serialized
-                    st.height = blk.height;
                     println!("mined block h{} {}", blk.height, hex::encode(&blk.get_hash()[..8]));
                 }
                 Err(e) => eprintln!("mine apply err: {e}"),

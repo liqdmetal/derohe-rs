@@ -1,23 +1,20 @@
-feat(wallet): 🏆 Rust tx MINED + EXECUTED on the Go chain — full circle
+feat(node): standalone Rust node — verified mempool + wallet RPCs
 
-The Rust wallet's transaction is now verifiably in the canonical chain:
+The Rust node is now self-sufficient (no Go simnode needed for txs):
 
-- submitted tx accepted into the Go mempool (SubmitTX → Add_TX_To_Pool)
-- FULL chain verification passes: Verify_Transaction_NonCoinbase → OK
-- miner selects it ("tx selected for mining <txid>")
-- the mined block's blob CONTAINS the Rust txid
-- wdst's encrypted balance changed from unregistered/zero to a real
-  non-zero balance after each Rust transfer — the state transition
-  (wsrc -10 DERO, wdst +10 DERO) executed on the Go chain
-
-The complete Rust→Go loop: recovery words → keys → ring fetch →
-statement (byte-identical to Go) → proof (self-verifying + Go-full-verify
-OK) → txid (byte-identical to Go's own computation) → broadcast →
-mempool → mine → execute.
-
-Key fixes on the path:
-- Witness.Balance = remaining (balance-value-fees-burn)
-- proof txid = get_hash(statement bpp)
-- simnode SubmitTX roundtrips to populate Publickeylist_pointers
-- ring deduped by compressed key (chain rejects dup pointers)
-- miner roothash check: tx must reference the live tip
+- real SubmitTX: deserialize -> expand CLn/CRn + publickeylist from the
+  node's own balance tree -> full bulletproof verify -> mempool
+- snapshot-based verification: per-block state snapshots (roothash ->
+  trees) so txs referencing a recent state verify correctly even while
+  the node mines (the live trees advance every block)
+- CheckTxHash RPC
+- wallet RPCs: GetEncryptedBalance (from own tree via blake2s pointer),
+  GetRandomAddress (32 registered bech32 candidates), GetRegistrations,
+  GetInfo with top_block_hash
+- --mine-interval-ms flag (default 2000)
+- wallet.rs: real BSGS balance decode (decode_balance) — the wallet
+  decodes its own encrypted balance with its secret, no daemon wallet
+  needed; the differential harness now passes the sender balance
+- END-TO-END PROVEN: Rust wallet -> Rust node (proof verified against
+  the node's state) -> mempool -> mined by the Rust node -> wdst
+  balance moved (10 DERO received). Fully Rust transaction loop.

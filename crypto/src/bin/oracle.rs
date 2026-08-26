@@ -731,11 +731,16 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 };
                 // member 0 = self (sender) with emap[0]
                 let sb = hex_decode(&ring_bal[0])?;
+                let self_bal_decoded: u64 =
+                    match inp.get("balance").and_then(|v| v.as_str()) {
+                        Some(b) => b.parse().map_err(|e| format!("balance: {e}"))?,
+                        None => 0,
+                    };
                 members.push(dero_crypto::tx_builder::RingMember {
                     public_key: self_comp,
                     balance: dero_crypto::elgamal::ElGamal::deserialize(&sb)
                         .map_err(|e| format!("self elgamal: {e}"))?,
-                    balance_decoded: 0,
+                    balance_decoded: self_bal_decoded,
                 });
                 // member 1 = receiver (dest) with emap[1]
                 let mut dk = [0u8; 33];
@@ -1005,7 +1010,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "proof_verify" => {
                 // verify a proof against a statement + txid (cross-check)
                 let stmt_b = hex_decode(&s("stmt")?)?;
-                let (stmt, _used) = dero_crypto::statement::Statement::deserialize(&stmt_b)
+                let (stmt, _used) = dero_crypto::bulletproof::Statement::deserialize(&stmt_b)
                     .map_err(|e| format!("stmt: {e}"))?;
                 let proof_b = hex_decode(&s("proof")?)?;
                 let proof = dero_crypto::bulletproof::deserialize(&proof_b, stmt.publickeylist.len().max(1).ilog2() as usize)

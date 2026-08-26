@@ -114,6 +114,50 @@ pub fn wallet_base_g() -> ark_bn254::G1Projective {
     base_g()
 }
 
+/// Decrypt an ElGamal balance with the account secret and recover the u64
+/// value via baby-step giant-step (the reference uses a lookup table built
+/// from the wallet's own tx history; BSGS works for any balance < 2^44).
+/// `max_bits` caps the search (default 44: balances up to ~17.5e12 atomic
+/// units ≈ 175,000 DERO).
+pub fn decode_balance(
+    ebal: &crate::elgamal::ElGamal,
+    secret: &Fr,
+    max_bits: u32,
+) -> Result<u64, String> {
+    use ark_ec::PrimeGroup;
+    use ark_ff::{PrimeField, Zero};
+    use std::collections::HashMap;
+
+    // plaintext point = Left - secret*Right = value*G
+    let point = ebal.left - ebal.right.mul_bigint(secret.into_bigint());
+    let g = base_g();
+    if point.is_zero() {
+        return Ok(0);
+    }
+    let max = 1u64 << max_bits.min(63);
+    let m: u64 = 1 << 20; // 1M baby steps (~32MB table)
+    // baby table: j*G for j in [1, m)
+    let mut baby: HashMap<[u8; 33], u64> = HashMap::with_capacity(m as usize);
+    let mut cur = g;
+    for j in 1..m {
+        baby.insert(encode_compressed(&cur), j);
+        cur += g;
+    }
+    // giant steps: point - i*m*G for i in [0, max/m)
+    let mg = g.mul_bigint(ark_bn254::Fr::from(m).into_bigint());
+    let mut cur = point;
+    let giant = (max + m - 1) / m;
+    for i in 0..giant {
+        if let Some(j) = baby.get(&encode_compressed(&cur)) {
+            return Ok(i * m + j);
+        }
+        cur -= mg;
+    }
+    Err(format!(
+        "balance decode: discrete log not found (balance >= 2^{max_bits}?)"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
