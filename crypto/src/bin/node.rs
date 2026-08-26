@@ -682,11 +682,16 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 }
             }
             if found.is_null() {
-                // also check the mempool
+                // also check the mempool — serve the ORIGINAL raw blob (the
+                // re-serialized form can differ in bpp for wallet txs)
                 let mp = mempool.lock().unwrap();
-                for (h, t) in &mp.txs {
-                    if h.as_slice() == txh.as_slice() {
-                        found = serde_json::json!([{"blob": hex::encode(t.serialize(3))}]);
+                if let Some(raw) = mp.raw.get(&txh.as_slice().try_into().unwrap_or([0u8; 32])) {
+                    found = serde_json::json!([{"blob": hex::encode(raw)}]);
+                } else {
+                    for (h, t) in &mp.txs {
+                        if h.as_slice() == txh.as_slice() {
+                            found = serde_json::json!([{"blob": hex::encode(t.serialize(3))}]);
+                        }
                     }
                 }
             }
@@ -953,6 +958,11 @@ fn main() {
                 .iter()
                 .filter_map(|h| mp.txs.get(h).cloned())
                 .collect();
+            let raw_txs: Vec<Vec<u8>> = blk
+                .tx_hashes
+                .iter()
+                .filter_map(|h| mp.raw.get(h).cloned())
+                .collect();
             drop(mp);
             // mine it (simulator: no PoW)
             let mut sim_miner = Miner { address: addr, simulator: true };
@@ -976,7 +986,7 @@ fn main() {
                     st.height = blk.height;
                     st.snapshot();
                     st.txids.push(blk.tx_hashes.clone());
-                    st.raw_txs.push(Vec::new()); // mined txs: raw = re-serialized
+                    st.raw_txs.push(raw_txs); // original wire blobs (bpp-correct)
                     println!("mined block h{} {}", blk.height, hex::encode(&blk.get_hash()[..8]));
                 }
                 Err(e) => eprintln!("mine apply err: {e}"),
