@@ -1,15 +1,12 @@
-feat(wallet): wallet state layer — history tracking + scan classification
+feat(wallet): full wallet scan — history tracking over the chain
 
-- NEW crypto/src/wallet_state.rs: clean-room port of the reference
-  wallet's transaction tracking (walletapi/wallet.go + the scan loop):
-  - Entry: height/topoheight/txpos/pos/blockhash/txid/amount/fees/
-    burn/incoming/coinbase/status/ring_member
-  - WalletState: per-SCID sorted entries (Go InsertReplace semantics),
-    Show_Transfers filtering, mature+locked balance cache
-  - process_tx_change: homomorphic classification
-    (ring member / outgoing / incoming) from the ElGamal balance delta
-  - find_our_pos / tx_touches_us: locate the wallet in a ring
-- oracle op wallet_scan_tx: classify a tx blob for the wallet (prev
-  balance reconstructed from CLn/CRn when present, or via ring)
-- tests: classify_in_out_ring (3-way classification + find_our_pos),
-  insert_replace_sorted (Go rescan semantics) — 68/68 total
+- node GetTransaction now serves the EXPANDED ring (bech32 per payload)
+  + block_height/tx_hash/valid_block, reference-compatible
+- oracle wallet_scan_tx: accepts the served ring, expands the statement's
+  publickeylist, finds our key, reconstructs the prev balance from
+  CLn/CRn, classifies IN/OUT/ring-member with amount + fees
+- node mining loop: REMOVE included txs from the mempool (they were being
+  re-included in every block — the wallet saw the same tx per block)
+- harness/scan_wallet2.py: full-chain wallet scan
+- PROVEN: 1 transfer -> exactly 1 history entry
+  (h28 OUT amt=5 fees=121 prev=126->0)

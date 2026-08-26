@@ -798,15 +798,44 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
             let txh = hex_decode(th).unwrap_or_default();
             let mut found = serde_json::Value::Null;
             // search by the ORIGINAL chain txids (index-aligned with txs),
-            // serving the RAW blob (byte-identical to the chain)
-            for (bi, (blk, _txs)) in st.blocks.iter().enumerate() {
+            // serving the RAW blob (byte-identical to the chain) + the
+            // EXPANDED ring (reference Tx_Related_Info.Ring)
+            for (bi, (blk, txs)) in st.blocks.iter().enumerate() {
                 let _ = blk;
                 if let Some(tids) = st.txids.get(bi) {
                     for (ti, tid) in tids.iter().enumerate() {
                         if tid.as_slice() == txh.as_slice() {
                             if let Some(raws) = st.raw_txs.get(bi) {
                                 if let Some(raw) = raws.get(ti) {
-                                    found = serde_json::json!([{"blob": hex::encode(raw)}]);
+                                    let mut info = serde_json::json!({
+                                        "blob": hex::encode(raw),
+                                        "tx_hash": hex::encode(tid),
+                                        "block_height": bi as i64,
+                                        "in_pool": false,
+                                        "valid_block": st.blocks.get(bi).map(|(b, _)| hex::encode(b.get_hash())).unwrap_or_default(),
+                                    });
+                                    // expand the ring: pointers -> keys via
+                                    // the balance tree -> bech32 addresses
+                                    if let Some(tx) = txs.get(ti) {
+                                        let mut ring: Vec<Vec<String>> = Vec::new();
+                                        for p in &tx.payloads {
+                                            let stmt = &p.statement;
+                                            let bpp = stmt.bpp() as usize;
+                                            let n = if bpp == 0 { 0 } else { stmt.pointers.len() / bpp };
+                                            let mut members = Vec::new();
+                                            for i in 0..n {
+                                                let ptr = &stmt.pointers[i * bpp..(i + 1) * bpp];
+                                                if let Some((k, _v)) = st.balance.get_key_value_from_hash(ptr) {
+                                                    if let Ok(a) = dero_crypto::rpc_addr::compressed_to_address(&k) {
+                                                        members.push(a);
+                                                    }
+                                                }
+                                            }
+                                            ring.push(members);
+                                        }
+                                        info["ring"] = serde_json::json!(ring);
+                                    }
+                                    found = serde_json::json!([info]);
                                 }
                             }
                         }
@@ -1177,7 +1206,15 @@ fn main() {
                 .iter()
                 .filter_map(|h| mp.raw.get(h).cloned())
                 .collect();
+            // remove included txs from the mempool (they're now in the block)
+            let included: Vec<[u8; 32]> = blk.tx_hashes.clone();
             drop(mp);
+            let mut mp2 = mempool.lock().unwrap();
+            for h in &included {
+                mp2.txs.remove(h);
+                mp2.raw.remove(h);
+            }
+            drop(mp2);
             // mine it (simulator: no PoW)
             let mut sim_miner = Miner { address: addr, simulator: true, secret: None };
             sim_miner.solve(&mut blk);

@@ -1056,15 +1056,50 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let our_key = dero_crypto::curve::encode_compressed(&sender);
                 let height: u64 = s("height")?.parse().map_err(|e| format!("height: {e}"))?;
                 let topoheight: u64 = s("topoheight")?.parse().map_err(|e| format!("topo: {e}"))?;
-                // optional expanded ring: JSON array of compressed keys per payload
+                // optional expanded ring: JSON [[bech32, ...], ...] per payload
+                // (the node serves it; the wire statement has only pointers)
+                let ring_json = inp
+                    .get("ring")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mut ring_per_payload: Vec<Vec<String>> = Vec::new();
+                if !ring_json.is_empty() {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ring_json) {
+                        if let Some(arr) = v.as_array() {
+                            for pl in arr {
+                                let mut members = Vec::new();
+                                if let Some(ms) = pl.as_array() {
+                                    for m in ms {
+                                        if let Some(a) = m.as_str() {
+                                            members.push(a.to_string());
+                                        }
+                                    }
+                                }
+                                ring_per_payload.push(members);
+                            }
+                        }
+                    }
+                }
                 let mut entries_out: Vec<serde_json::Value> = Vec::new();
                 for (ti, p) in tx.payloads.iter().enumerate() {
-                    let st = &p.statement;
+                    let mut st = p.statement.clone();
+                    // expand publickeylist from the served ring addresses
                     if st.publickeylist.is_empty() {
-                        continue;
+                        if let Some(members) = ring_per_payload.get(ti) {
+                            let mut pks = Vec::new();
+                            for a in members {
+                                if let Ok(comp) = dero_crypto::rpc_addr::address_to_compressed(a) {
+                                    if let Ok(pk) = dero_crypto::curve::decode_compressed(&comp) {
+                                        pks.push(pk);
+                                    }
+                                }
+                            }
+                            st.publickeylist = pks;
+                        }
                     }
                     // our position
-                    let pos = match dero_crypto::wallet_state::find_our_pos(st, &our_key) {
+                    let pos = match dero_crypto::wallet_state::find_our_pos(&st, &our_key) {
                         Some(x) => x,
                         None => continue,
                     };
