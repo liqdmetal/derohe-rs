@@ -1,8 +1,8 @@
-fix(node): preserve original tx blobs — node-to-node sync with wallet txs
+feat(node): P2P relay — multi-node Rust network
 
-- GetTransaction serves the ORIGINAL raw blob from the mempool (the
-  re-serialized form diverges in bpp for wallet txs — bpp=2 vs 3)
-- the mining loop stores the original wire blobs per mined block
-- END-TO-END NETWORK PROVEN: Rust wallet -> Rust node A (verify+mine) ->
-  Rust node B syncs 96 blocks byte-identically and sees wdst's balance
-  moved. A fully-Rust DERO network carrying a wallet transaction.
+- --peers <list>: connect to multiple peers
+- keep-synced loop: every 5s pull new blocks from every peer (incremental)
+- SubmitTX relays the raw blob to all peers (each verifies independently)
+- PROVEN: wallet -> node A (verify + relay + mine) -> node B (relay
+  receive + keep-sync + state). Two Rust nodes form a network carrying
+  a wallet transaction end to end; wdst balance propagates to B.

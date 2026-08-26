@@ -568,7 +568,7 @@ impl Miner {
 // HTTP JSON-RPC server
 // ---------------------------------------------------------------------------
 
-fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mutex<Mempool>>, miner: &Miner) -> String {
+fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mutex<Mempool>>, miner: &Miner, peers: &[String]) -> String {
     let v: serde_json::Value = match serde_json::from_str(req_body) {
         Ok(v) => v,
         Err(_) => return json_err(-32700, "parse error"),
@@ -771,8 +771,17 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 Err(e) => return json_err_id(-32000, &format!("deserialize: {e}"), id),
             };
             drop(st);
-            let mut mp = mempool.lock().unwrap();
-            if mp.add(tx, raw) {
+            let added = {
+                let mut mp = mempool.lock().unwrap();
+                mp.add(tx, raw.clone())
+            };
+            if added {
+                // P2P relay: forward the raw blob to every peer (fire and
+                // forget — the peer verifies before accepting)
+                let blob_hex = hex::encode(&raw);
+                for p in peers {
+                    let _ = rpc_call(p, "DERO.SubmitTX", serde_json::json!({"blob": blob_hex.clone()}));
+                }
                 serde_json::json!({"txid": hex::encode(txid), "status": "OK"})
             } else {
                 return json_err_id(-32000, "tx already in pool", id);
@@ -804,7 +813,7 @@ fn json_err_id(code: i64, msg: &str, id: serde_json::Value) -> String {
     serde_json::json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":msg}}).to_string()
 }
 
-fn serve(port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Mempool>>, miner: Arc<Miner>) {
+fn serve(port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Mempool>>, miner: Arc<Miner>, peers: Arc<Vec<String>>) {
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
     println!("node RPC listening on 127.0.0.1:{port}");
     for stream in listener.incoming() {
@@ -841,7 +850,7 @@ fn serve(port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Mempool>>,
                 let resp = if body.trim().is_empty() {
                     json_err(-32700, "empty request")
                 } else {
-                    handle_rpc(body, &store, &mempool, &miner)
+                    handle_rpc(body, &store, &mempool, &miner, &peers)
                 };
                 let out = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -888,6 +897,7 @@ fn parse_addr(s: &str) -> Result<[u8; 33], String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut peer = "http://127.0.0.1:25000/json_rpc".to_string();
+    let mut extra_peers: Vec<String> = Vec::new();
     let mut port: u16 = 26000;
     let mut mine = false;
     let mut mine_interval_ms: u64 = 2000;
@@ -897,19 +907,23 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--peer" => { i += 1; peer = args[i].clone(); }
+            "--peers" => { i += 1; extra_peers = args[i].split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
             "--port" => { i += 1; port = args[i].parse().unwrap_or(26000); }
             "--mine" => mine = true,
             "--mine-interval-ms" => { i += 1; mine_interval_ms = args[i].parse().unwrap_or(2000); }
             "--miner" => { i += 1; miner_addr = args[i].clone(); }
             "--mainnet" => simulator = false, // verify proofs strictly
             "--help" => {
-                println!("dero-node [--peer URL] [--port N] [--mine] [--miner ADDR] [--mainnet]");
+                println!("dero-node [--peer URL] [--peers a,b] [--port N] [--mine] [--miner ADDR] [--mine-interval-ms N] [--mainnet]");
                 return;
             }
             _ => {}
         }
         i += 1;
     }
+    let mut peers = extra_peers;
+    peers.push(peer.clone());
+    peers.dedup();
 
     let store = Arc::new(Mutex::new(ChainStore::new()));
     let mempool = Arc::new(Mutex::new(Mempool::new()));
@@ -931,7 +945,30 @@ fn main() {
     let m2 = mempool.clone();
     let miner = Arc::new(Miner { address: [0u8; 33], simulator: true });
     let m3 = miner.clone();
-    std::thread::spawn(move || serve(port, s2, m2, m3));
+    let peers_arc = Arc::new(peers.clone());
+    let p2 = peers_arc.clone();
+    std::thread::spawn(move || serve(port, s2, m2, m3, p2));
+
+    // keep-synced loop: pull new blocks from every peer periodically
+    // (incremental — sync_from_peer applies from our height+1)
+    let s3 = store.clone();
+    let p3 = peers_arc.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let mut st = s3.lock().unwrap();
+            for p in p3.iter() {
+                match sync_from_peer(&mut st, p, simulator) {
+                    Ok(n) => {
+                        if n > 0 {
+                            println!("pulled {n} new blocks from {p}");
+                        }
+                    }
+                    Err(e) => eprintln!("sync {p}: {e}"),
+                }
+            }
+        }
+    });
 
     // mining loop
     if mine {
