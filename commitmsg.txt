@@ -1,9 +1,12 @@
-feat(wallet): SC install txs — Rust wallet deploys a smart contract
+feat(node): integrated wallet mode — DERO.Transfer from the node's own state
 
-- tx_builder: SC txs now use TX_SC = 5 (was wrongly 1 = TX_REGISTRATION) —
-  this was corrupting the header layout (value/height/scdata)
-- the SC wallet path builds a 0-value transfer to a ring member with
-  SC_ACTION=1 (SC_INSTALL) + SC_CODE args; fees use the real scdata
-  marshal length
-- PROVEN: Rust wallet --sc-install -> Rust node verifies + mines ->
-  SC install tx in block 953 of the Rust chain
+- --seed <words>: the node derives the wallet secret; the RPC server
+  shares it, so DERO.Transfer works without any external wallet
+- DERO.Transfer {dest, amount}: builds the ring from the node's own
+  balance tree, decodes the sender balance locally (BSGS), computes
+  roothash/blid/height from its own state, builds + self-verifies +
+  mempool-adds the tx — one RPC, fully internal
+- parse_addr: check the bech32 prefix FIRST (some addresses are exactly
+  66 chars and collided with the hex-key branch)
+- PROVEN: DERO.Transfer(25) -> mined in block 191 -> wdst balance moved,
+  all inside the Rust node

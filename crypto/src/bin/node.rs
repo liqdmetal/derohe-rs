@@ -23,6 +23,9 @@ use dero_crypto::chain;
 use dero_crypto::curve::decode_compressed;
 use dero_crypto::graviton::Tree;
 use dero_crypto::transaction::Transaction;
+use dero_crypto::tx_builder::{build_transaction, RingMember, Transfer};
+use ark_bn254::Fr;
+use ark_ff::PrimeField;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -448,6 +451,7 @@ fn verify_raw_tx(store: &ChainStore, raw: &[u8]) -> Result<[u8; 32], String> {
 struct Miner {
     address: [u8; 33],
     simulator: bool,
+    secret: Option<Fr>, // wallet mode: --seed derived secret
 }
 
 impl Miner {
@@ -578,6 +582,110 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
     let id = v["id"].clone();
     let st = store.lock().unwrap();
     let result = match method.as_str() {
+        "DERO.Transfer" => {
+            // wallet mode: build + submit a NORMAL transfer from the node's
+            // own balance tree (needs --seed). The ring, balances, roothash,
+            // blid and height all come from OUR state — no external fetch.
+            let (secret, self_addr) = match (miner.secret, miner.address) {
+                (Some(s), a) => (s, a),
+                _ => return json_err_id(-32000, "node has no wallet (start with --seed)", id),
+            };
+            let dest = params["dest"].as_str().unwrap_or("");
+            let amount: u64 = params["amount"].as_u64().unwrap_or(0);
+            let dest_comp: [u8; 33] = match parse_addr(dest) {
+                Ok(c) => c,
+                Err(e) => return json_err_id(-32000, &format!("bad dest: {e}"), id),
+            };
+            if self_addr == dest_comp {
+                return json_err_id(-32000, "cannot send to self", id);
+            }
+            // ring = [self, dest, others] — all distinct, from the tree
+            let mut ring_members: Vec<[u8; 33]> = vec![self_addr, dest_comp];
+            for k in dero_crypto::graviton::tree_keys(&st.balance) {
+                if k.len() != 33 {
+                    continue;
+                }
+                let mut kk = [0u8; 33];
+                kk.copy_from_slice(&k);
+                if kk == self_addr || kk == dest_comp {
+                    continue;
+                }
+                ring_members.push(kk);
+                if ring_members.len() >= 8 {
+                    break;
+                }
+            }
+            if ring_members.len() < 8 {
+                return json_err_id(-32000, &format!("need 8 ring members, got {}", ring_members.len()), id);
+            }
+            // balances from the tree + BSGS decode for self
+            let mut ring: Vec<RingMember> = Vec::new();
+            for (i, k) in ring_members.iter().enumerate() {
+                let nb = st
+                    .balance
+                    .get(k)
+                    .and_then(|v| NonceBalance::deserialize(&v).ok())
+                    .map(|n| n.balance)
+                    .unwrap_or_else(|| {
+                        // unregistered: zero ciphertext for this key
+                        let key = decode_compressed(k).unwrap_or_default();
+                        dero_crypto::elgamal::ElGamal::new(key, dero_crypto::hash_to_point::base_g())
+                    });
+                let decoded = if i == 0 {
+                    dero_crypto::wallet::decode_balance(&nb, &secret, 44).unwrap_or(0)
+                } else {
+                    0
+                };
+                ring.push(RingMember { public_key: *k, balance: nb, balance_decoded: decoded });
+            }
+            let roothash = st.roothash();
+            let blid = st
+                .blocks
+                .last()
+                .map(|(b, _)| b.get_hash())
+                .unwrap_or([0u8; 32]);
+            let height = st.height;
+            drop(st);
+            // build + verify + mempool
+            let transfers = vec![Transfer {
+                destination: dest.to_string(),
+                amount,
+                burn: 0,
+                scid: [0u8; 32],
+                payload_rpc: Vec::new(),
+            }];
+            let tx = match build_transaction(
+                &transfers,
+                &[ring],
+                0,
+                1,
+                &blid,
+                height,
+                &dero_crypto::rpc_args::Arguments::default(),
+                &roothash,
+                9,
+                0,
+                &secret,
+                &[0x5au8; 16384],
+            ) {
+                Ok(t) => t,
+                Err(e) => return json_err_id(-32000, &format!("build: {e}"), id),
+            };
+            let blob = tx.serialize(2);
+            let txid = {
+                let st2 = store.lock().unwrap();
+                match verify_raw_tx(&st2, &blob) {
+                    Ok(t) => t,
+                    Err(e) => return json_err_id(-32000, &format!("verify: {e}"), id),
+                }
+            };
+            let mut mp = mempool.lock().unwrap();
+            if mp.add(tx, blob) {
+                serde_json::json!({"txid": hex::encode(txid), "status": "OK"})
+            } else {
+                return json_err_id(-32000, "tx already in pool", id);
+            }
+        }
         "DERO.GetInfo" => serde_json::json!({
             "height": st.height,
             "tips": 1,
@@ -883,15 +991,22 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
 }
 
 fn parse_addr(s: &str) -> Result<[u8; 33], String> {
-    if s.len() == 66 {
+    if s.starts_with("deto") || s.starts_with("dero") || s.starts_with("detoi") || s.starts_with("deroi") {
+        // bech32 deto1/dero1 (note: some addresses are exactly 66 chars,
+        // same length as a hex key — check the prefix FIRST)
+        dero_crypto::rpc_addr::address_to_compressed(s)
+            .map(|v| v.try_into().map_err(|_| "bad address".to_string()))
+            .map_err(|e| e.to_string())?
+    } else if s.len() == 66 {
         // raw compressed key hex
         let b = hex_decode(s)?;
-        return b.try_into().map_err(|_| "bad 33-byte key".into());
+        b.try_into().map_err(|_| "bad 33-byte key".into())
+    } else {
+        // bech32 fallback
+        dero_crypto::rpc_addr::address_to_compressed(s)
+            .map(|v| v.try_into().map_err(|_| "bad address".to_string()))
+            .map_err(|e| e.to_string())?
     }
-    // bech32 deto1/dero1
-    dero_crypto::rpc_addr::address_to_compressed(s)
-        .map(|v| v.try_into().map_err(|_| "bad address".to_string()))
-        .map_err(|e| e.to_string())?
 }
 
 fn main() {
@@ -903,6 +1018,7 @@ fn main() {
     let mut mine_interval_ms: u64 = 2000;
     let mut simulator = true; // simulator mode: skip proof verification (matches reference simnode laxity)
     let mut miner_addr = String::new();
+    let mut seed_words = String::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -912,9 +1028,10 @@ fn main() {
             "--mine" => mine = true,
             "--mine-interval-ms" => { i += 1; mine_interval_ms = args[i].parse().unwrap_or(2000); }
             "--miner" => { i += 1; miner_addr = args[i].clone(); }
+            "--seed" => { i += 1; seed_words = args[i].clone(); }
             "--mainnet" => simulator = false, // verify proofs strictly
             "--help" => {
-                println!("dero-node [--peer URL] [--peers a,b] [--port N] [--mine] [--miner ADDR] [--mine-interval-ms N] [--mainnet]");
+                println!("dero-node [--peer URL] [--peers a,b] [--port N] [--mine] [--miner ADDR] [--seed WORDS] [--mine-interval-ms N] [--mainnet]");
                 return;
             }
             _ => {}
@@ -940,10 +1057,27 @@ fn main() {
         }
     }
 
-    // start RPC
+    // start RPC (share the wallet Miner so DERO.Transfer works)
+    let wallet_secret = if !seed_words.is_empty() {
+        let w: Vec<String> = seed_words.split_whitespace().map(|s| s.to_string()).collect();
+        dero_crypto::mnemonics::words_to_key(&w).ok().map(|k| {
+            let mut le = [0u8; 32];
+            for i in 0..32 {
+                le[i] = k[31 - i];
+            }
+            Fr::from_le_bytes_mod_order(&le)
+        })
+    } else {
+        None
+    };
+    let wallet_addr = if !miner_addr.is_empty() {
+        parse_addr(&miner_addr).unwrap_or([0u8; 33])
+    } else {
+        [0u8; 33]
+    };
     let s2 = store.clone();
     let m2 = mempool.clone();
-    let miner = Arc::new(Miner { address: [0u8; 33], simulator: true });
+    let miner = Arc::new(Miner { address: wallet_addr, simulator: true, secret: wallet_secret });
     let m3 = miner.clone();
     let peers_arc = Arc::new(peers.clone());
     let p2 = peers_arc.clone();
@@ -979,7 +1113,26 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        let miner = Miner { address: addr, simulator: true };
+        let secret = if !seed_words.is_empty() {
+            // wallet mode: derive the secret from the recovery words
+            let w: Vec<String> = seed_words.split_whitespace().map(|s| s.to_string()).collect();
+            match dero_crypto::mnemonics::words_to_key(&w) {
+                Ok(k) => {
+                    let mut le = [0u8; 32];
+                    for i in 0..32 {
+                        le[i] = k[31 - i];
+                    }
+                    Some(ark_bn254::Fr::from_le_bytes_mod_order(&le))
+                }
+                Err(e) => {
+                    eprintln!("bad --seed words: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            None
+        };
+        let miner = Miner { address: addr, simulator: true, secret };
         loop {
             std::thread::sleep(std::time::Duration::from_millis(mine_interval_ms));
             let ts = std::time::SystemTime::now()
@@ -1002,7 +1155,7 @@ fn main() {
                 .collect();
             drop(mp);
             // mine it (simulator: no PoW)
-            let mut sim_miner = Miner { address: addr, simulator: true };
+            let mut sim_miner = Miner { address: addr, simulator: true, secret: None };
             sim_miner.solve(&mut blk);
             let genesis = blk.height == 0;
             let k0 = st.k0_floor;
