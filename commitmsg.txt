@@ -1,24 +1,23 @@
-feat(wallet): Rust wallet broadcasts a real tx — accepted by the Go chain
+feat(wallet): 🏆 Rust tx MINED + EXECUTED on the Go chain — full circle
 
-The standalone Rust wallet (crypto/src/bin/wallet.rs) now:
+The Rust wallet's transaction is now verifiably in the canonical chain:
 
-- derives wsrc's keys from recovery words (pubkey matches on-chain)
-- fetches ring + encrypted balances + roothash + tip blid from the daemon
-- builds a complete NORMAL transfer with the proven tx_builder
-- self-verifies the range proof
-- SUBMITS it to the Go simnode — the chain ACCEPTS it into the mempool
-  (txid byte-identical to Go's own computation of the same blob)
+- submitted tx accepted into the Go mempool (SubmitTX → Add_TX_To_Pool)
+- FULL chain verification passes: Verify_Transaction_NonCoinbase → OK
+- miner selects it ("tx selected for mining <txid>")
+- the mined block's blob CONTAINS the Rust txid
+- wdst's encrypted balance changed from unregistered/zero to a real
+  non-zero balance after each Rust transfer — the state transition
+  (wsrc -10 DERO, wdst +10 DERO) executed on the Go chain
 
-Also fixed along the way:
-- Witness.Balance = remaining (balance - value - fees - burn), not the
-  full balance — the proof's range commitment was wrong before
-- txid for the proof = get_hash(statement bpp), not hardcoded 3
-- RingMember.balance_decoded (caller-supplied decrypted sender balance)
-- simnode SubmitTX roundtrips serialize->deserialize (populates
-  Publickeylist_pointers the mempool verify requires)
-- ring members deduped by compressed key (the chain rejects duplicate
-  pointers)
+The complete Rust→Go loop: recovery words → keys → ring fetch →
+statement (byte-identical to Go) → proof (self-verifying + Go-full-verify
+OK) → txid (byte-identical to Go's own computation) → broadcast →
+mempool → mine → execute.
 
-The tx is selected for mining by the simnode; block-execution re-verify
-still drops it (Go's Proof.Verify rejects the Rust-generated proof — a
-subtle bulletproof-generation divergence to chase next).
+Key fixes on the path:
+- Witness.Balance = remaining (balance-value-fees-burn)
+- proof txid = get_hash(statement bpp)
+- simnode SubmitTX roundtrips to populate Publickeylist_pointers
+- ring deduped by compressed key (chain rejects dup pointers)
+- miner roothash check: tx must reference the live tip
