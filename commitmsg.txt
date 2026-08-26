@@ -1,8 +1,9 @@
-feat(node): P2P relay — multi-node Rust network
+feat(wallet): SC install txs — Rust wallet deploys a smart contract
 
-- --peers <list>: connect to multiple peers
-- keep-synced loop: every 5s pull new blocks from every peer (incremental)
-- SubmitTX relays the raw blob to all peers (each verifies independently)
-- PROVEN: wallet -> node A (verify + relay + mine) -> node B (relay
-  receive + keep-sync + state). Two Rust nodes form a network carrying
-  a wallet transaction end to end; wdst balance propagates to B.
+- tx_builder: SC txs now use TX_SC = 5 (was wrongly 1 = TX_REGISTRATION) —
+  this was corrupting the header layout (value/height/scdata)
+- the SC wallet path builds a 0-value transfer to a ring member with
+  SC_ACTION=1 (SC_INSTALL) + SC_CODE args; fees use the real scdata
+  marshal length
+- PROVEN: Rust wallet --sc-install -> Rust node verifies + mines ->
+  SC install tx in block 953 of the Rust chain

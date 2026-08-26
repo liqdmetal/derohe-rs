@@ -8,6 +8,7 @@ use dero_crypto::elgamal::ElGamal;
 use dero_crypto::hash_to_point::base_g;
 use dero_crypto::mnemonics::words_to_key;
 use dero_crypto::rpc_addr::address_to_compressed;
+use dero_crypto::rpc_args::{Argument, ArgValue, Arguments, DATA_STRING, DATA_UINT64, SC_ACTION, SC_CODE};
 use dero_crypto::tx_builder::{build_transaction, RingMember, Transfer};
 use dero_crypto::wallet::{calc_r, generate_shared_secret, reduced_hash};
 use ark_bn254::Fr;
@@ -18,12 +19,15 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 5 {
         eprintln!("usage: wallet.exe <words> <dest> <amount> <daemon>");
+        eprintln!("       wallet.exe <words> --sc-install <code> <daemon>");
         std::process::exit(1);
     }
     let words = &args[1];
-    let dest = &args[2];
-    let amount: u64 = args[3].parse().expect("amount");
-    let daemon = &args[4];
+    let sc_install = args.len() >= 5 && args[2] == "--sc-install";
+    let dest = if sc_install { String::new() } else { args[2].clone() };
+    let amount: u64 = if sc_install { 0 } else { args[3].parse().expect("amount") };
+    let daemon = if sc_install { args[4].clone() } else { args[4].clone() };
+    let sc_code = if sc_install { args[3].clone() } else { String::new() };
 
     // 1. derive the wallet keys
     let seed = words_to_key(&words.split_whitespace().map(|w| w.to_string()).collect::<Vec<_>>())
@@ -38,7 +42,7 @@ fn main() {
     println!("sender:   {}", hex::encode(&sender_comp[..16]));
 
     // 2. fetch a ring from the daemon (GetRandomAddress)
-    let ring_addrs: Vec<String> = json_rpc(daemon, "DERO.GetRandomAddress", serde_json::json!({}))
+    let ring_addrs: Vec<String> = json_rpc(&daemon, "DERO.GetRandomAddress", serde_json::json!({}))
         .get("result")
         .and_then(|r| r.get("address"))
         .and_then(|a| a.as_array())
@@ -53,9 +57,20 @@ fn main() {
     let self_addr = dero_crypto::rpc_addr::compressed_to_address(&sender_comp)
         .unwrap_or_else(|_| ring_addrs[0].clone());
     println!("self addr: {}", self_addr.chars().take(24).collect::<String>());
-    // ring = [self, dest, others] — ALL DISTINCT by compressed key
-    let mut ring_members: Vec<String> = vec![self_addr.clone(), dest.to_string()];
-    for a in ring_addrs.into_iter().filter(|a| a != &self_addr && a.as_str() != dest) {
+    // ring = [self, (dest or a random member), others] — ALL DISTINCT keys.
+    // SC installs use ring size 4 (like the reference).
+    let ring_size = if sc_install { 4 } else { 8 };
+    let dest_for_ring = if sc_install {
+        ring_addrs
+            .iter()
+            .find(|a| *a != &self_addr)
+            .cloned()
+            .unwrap_or_else(|| ring_addrs[0].clone())
+    } else {
+        dest.clone()
+    };
+    let mut ring_members: Vec<String> = vec![self_addr.clone(), dest_for_ring.clone()];
+    for a in ring_addrs.into_iter().filter(|a| a != &self_addr && a.as_str() != dest_for_ring) {
         // skip if the key is already present (dup)
         let ak = address_to_compressed(&a).unwrap_or_default();
         let dup = ring_members.iter().any(|m| {
@@ -64,19 +79,20 @@ fn main() {
         if !dup {
             ring_members.push(a);
         }
-        if ring_members.len() == 8 {
+        if ring_members.len() >= ring_size {
             break;
         }
     }
-    if ring_members.len() < 8 {
-        eprintln!("need 8 distinct ring members, got {}", ring_members.len());
+    if ring_members.len() < ring_size {
+        eprintln!("need {ring_size} distinct ring members, got {}", ring_members.len());
         std::process::exit(1);
     }
+    let dest = dest_for_ring; // the 0-value destination for SC installs
 
     // 3. fetch encrypted balances + roothash from the daemon
     //    (at the resolved topoheight, matching the roothash snapshot)
     let eb0 = json_rpc(
-        daemon,
+        &daemon,
         "DERO.GetEncryptedBalance",
         serde_json::json!({"address": ring_members[0], "scid": "0".repeat(64), "topoheight": -1}),
     );
@@ -90,7 +106,7 @@ fn main() {
     let mut roothash = [0u8; 32];
     for (i, addr) in ring_members.iter().enumerate() {
         let eb = json_rpc(
-            daemon,
+            &daemon,
             "DERO.GetEncryptedBalance",
             serde_json::json!({"address": addr, "scid": "0".repeat(64), "topoheight": topoheight}),
         );
@@ -157,7 +173,7 @@ fn main() {
     // 4. build the transaction — reference the CURRENT block hash + height
     //    (the daemon's GetInfo provides them; the tx must reference a real
     //    block or the chain rejects it)
-    let info = json_rpc(daemon, "DERO.GetInfo", serde_json::json!({}));
+    let info = json_rpc(&daemon, "DERO.GetInfo", serde_json::json!({}));
     let height: u64 = info
         .get("result")
         .and_then(|r| r.get("height"))
@@ -181,6 +197,15 @@ fn main() {
         scid: [0u8; 32],
         payload_rpc: Vec::new(),
     }];
+    // SC install: SC_ACTION = 1 (SC_INSTALL), SC_CODE = the source
+    let scdata = if sc_install {
+        Arguments(vec![
+            Argument { name: SC_ACTION.to_string(), data_type: DATA_UINT64, value: ArgValue::U64(1) },
+            Argument { name: SC_CODE.to_string(), data_type: DATA_STRING, value: ArgValue::Str(sc_code.clone()) },
+        ])
+    } else {
+        Arguments::default()
+    };
     let tx = build_transaction(
         &transfers,
         &[ring],
@@ -188,7 +213,7 @@ fn main() {
         1,
         &blid,
         height,
-        &dero_crypto::rpc_args::Arguments::default(),
+        &scdata,
         &roothash,
         9,
         0,
@@ -200,6 +225,8 @@ fn main() {
     // 5. self-verify the proof
     let txid = tx.get_hash(2);
     println!("txid: {}", hex::encode(txid));
+    println!("tx.height = {} tx.blid = {}", tx.height, hex::encode(&tx.blid[..8]));
+    println!("tx.npayloads = {} scdata.len = {}", tx.payloads.len(), tx.scdata.len());
     for (i, p) in tx.payloads.iter().enumerate() {
         let ok = verify(&p.scid, i as i32, &p.statement, p.proof.as_ref().unwrap(), &txid, p.burn_value);
         println!("proof[{}] self-verify: {}", i, ok);
@@ -213,12 +240,20 @@ fn main() {
 
     // 6. broadcast (simnode's SubmitTX expects {"blob": "hex"})
     let blob = hex::encode(tx.serialize(2));
+    println!("blob: {}", blob);
+    // debug: the serialized header bytes
+    println!("ser[..40]: {}", blob.chars().take(80).collect::<String>());
+    // roundtrip debug: serialize -> deserialize (strict)
+    match dero_crypto::transaction::Transaction::deserialize(&tx.serialize(2), 2) {
+        Ok(_) => println!("roundtrip strict: OK"),
+        Err(e) => println!("roundtrip strict: ERR {e}"),
+    }
     // cross-check: what txid does GO compute for this blob?
-    let chk = json_rpc(daemon, "DERO.CheckTxHash", serde_json::json!({"blob": blob}));
+    let chk = json_rpc(&daemon, "DERO.CheckTxHash", serde_json::json!({"blob": blob}));
     let go_txid = chk.get("result").and_then(|r| r.get("txid")).and_then(|t| t.as_str()).unwrap_or("ERR").to_string();
     println!("GO txid for our blob: {}", go_txid.chars().take(24).collect::<String>());
     println!("our txid:            {}", hex::encode(txid).chars().take(24).collect::<String>());
-    let resp = json_rpc(daemon, "DERO.SubmitTX", serde_json::json!({"blob": blob}));
+    let resp = json_rpc(&daemon, "DERO.SubmitTX", serde_json::json!({"blob": blob}));
     println!("submit: {}", serde_json::to_string(&resp).unwrap_or_default().chars().take(200).collect::<String>());
 }
 

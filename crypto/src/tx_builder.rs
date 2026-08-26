@@ -10,7 +10,7 @@ use crate::curve::encode_compressed;
 use crate::elgamal::ElGamal;
 use crate::hash_to_point::base_g;
 use crate::rpc_args::Arguments;
-use crate::transaction::{Transaction, TX_NORMAL};
+use crate::transaction::{Transaction, TX_NORMAL, TX_SC};
 use crate::wallet::{calc_r, calc_u, encrypt_decrypt_user_data, generate_shared_secret};
 use blake2::Digest;
 
@@ -61,7 +61,7 @@ pub fn build_transaction(
         version: 1,
         source_network: 0,
         dest_network: 0,
-        tx_type: if scdata.len() >= 1 { 1 } else { TX_NORMAL }, // 1 = SC_TX
+        tx_type: if scdata.len() >= 1 { TX_SC } else { TX_NORMAL }, // 5 = SC_TX (Go TX_SC)
         value: 0,
         miner_address: [0u8; 33],
         c: [0u8; 32],
@@ -132,8 +132,12 @@ pub fn build_transaction(
                 let mult = 2.0f64; // wallet FeesMultiplier (from recovery words)
                 let base = (20.0f64 * ((ring as f64 / 16.0).floor() + mult)) as u64;
                 fees_for_asset = (transfers.len() as u64 + 2) * base;
-                // scdata marshal length: CBOR of the args (0xA0 = 1 byte for empty)
-                let sc_len = if scdata.len() == 0 { 1 } else { scdata.len() as u64 * 2 };
+                // scdata marshal length: the ACTUAL CBOR byte length of the
+                // args (Go: len(scdata_marshal) * 15 / 10)
+                let sc_len = match scdata.marshal_binary() {
+                    Ok(b) => b.len() as u64,
+                    Err(_) => 1,
+                };
                 fees_for_asset += (sc_len * 15) / 10;
             } else {
                 fees_for_asset = fees;
