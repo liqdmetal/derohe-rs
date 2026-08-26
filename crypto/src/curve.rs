@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! alt_bn128 (BN254) group operations and the DERO-specific point codec.
 //!
 //! Mirrors derohe `cryptography/bn256` + `cryptography/crypto/group.go`.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: BSD-3-Clause
 # TDM-GCC-64 (10.3.0) ships no libgcc_eh.a; rustc's GNU target links -lgcc_eh.
 # All deps here are pure Rust (no C++ objects), so an empty archive satisfies
 # the linker without pulling real gcc_eh code.

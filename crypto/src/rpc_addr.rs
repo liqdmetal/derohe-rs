@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! DERO bech32 address <-> compressed-key helpers for the DVM address
 //! builtins (address_raw / address_string). Mirrors rpc/address.go +
 //! rpc/bech32.go: data = 0x01 version ‖ 33-byte compressed key, 8→5

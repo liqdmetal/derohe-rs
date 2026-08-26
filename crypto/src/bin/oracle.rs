@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Differential-test oracle binary: mirrors oracle/main.go's JSONL protocol so
 //! harness/difftest.py can compare Go reference vs Rust implementation.
 //!

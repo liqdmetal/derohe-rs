@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Transaction serialization — mirrors derohe `transaction/transaction.go`.
 //!
 //! Layout (version 1):

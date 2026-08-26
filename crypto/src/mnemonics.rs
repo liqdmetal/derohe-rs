@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! DERO mnemonic (recovery words) — clean-room port of the reference
 //! walletapi/mnemonics algorithm.
 //!

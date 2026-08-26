@@ -171,17 +171,17 @@ Toolchain notes (Windows):
 
 ## License
 
-- **Rust crate (`crypto/`): DERO Research License v1.1.2** (see LICENSE) —
-  **research-only**, matching the DERO ecosystem license. This is a
-  deliberate decision to keep the port within DERO's licensing family:
-  non-commercial research/evaluation/development use, no commercial gain.
-  Clean-room: written from the DERO reference source + protocol spec,
-  NOT copied from it.
+- **This repository: BSD 3-Clause License** (see `LICENSE`). A clean-room,
+  from-scratch Rust reimplementation of DERO's consensus-critical
+  cryptography, independently authored from the DERO protocol spec and
+  verified byte-for-byte against the Go reference as a differential-test
+  oracle. See `NOTICE.md` for the full provenance statement and the
+  reference's separate licensing.
 - **`oracle/` (Go): test-only glue.** It links the REAL derohe packages
-  (under the same DERO Research License v1.1.2) via the `replace`
-  directive to `../derohe-reference`. The oracle source is a thin JSONL
-  shim; the reference it links is gitignored and never committed. It is
-  a test harness, not part of the crate, and carries the same
-  non-commercial constraint as the DERO code it calls.
+  (under the DERO Research License v1.1.2) via the `replace` directive to
+  `../derohe-reference`. The oracle source is a thin JSONL shim; the
+  reference it links is gitignored and never committed. It is a test
+  harness, not part of the crate, and carries the same non-commercial
+  constraint as the DERO code it calls.
 - **`derohe-reference/`**: DERO Research License v1.1.2 — **test oracle
   only, never committed, never copied into the Rust crate** (clean-room).

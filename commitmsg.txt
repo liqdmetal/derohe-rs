@@ -1,6 +1,16 @@
-feat(node): DERO.Transfer sc_code — deploy SCs from the node wallet
+chore(license): BSD-3-Clause with clean-room NOTICE
 
-- DERO.Transfer accepts an optional sc_code param: builds an SC_INSTALL
-  tx (SC_ACTION=1 + SC_CODE, ring size 4, 0-value transfer to a ring
-  member) — one RPC deploys a contract entirely from the node's state
-- PROVEN: DERO.Transfer(sc_code) -> mined in block 37 of the Rust chain
+Swap the repo to the BSD 3-Clause License and document the clean-room
+provenance:
+
+- LICENSE: BSD-3-Clause (was accidentally the DERO Research License —
+  that license applied to the Go reference, not this repo)
+- NOTICE.md (new): provenance statement — clean-room implementation,
+  reference used only as a black-box differential-test oracle,
+  zero derohe code committed, protocol facts are not copyrightable
+  expression, XELIS precedent
+- README: license section rewritten (repo = BSD-3; oracle/ and
+  derohe-reference/ remain DERO Research License test-only glue)
+- SPDX-License-Identifier: BSD-3-Clause headers on all 33 .rs, 23 .py,
+  and 2 .toml files
+- Cargo.toml: license = "BSD-3-Clause" + repository declared

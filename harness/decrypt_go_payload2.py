@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Clean decrypt of Go's RPCPayload using the verified r."""
 import json, subprocess, urllib.request
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Cross-check: Go's proof vs Rust's verifier and vice versa."""
 import json, subprocess, urllib.request
 

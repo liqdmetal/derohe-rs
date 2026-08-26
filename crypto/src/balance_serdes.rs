@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! NonceBalance serialization — mirrors derohe `balance_serdes.go`.
 //!
 //! Wire format: uvarint(NonceHeight) ‖ ElGamal(66 bytes: 33-byte compressed

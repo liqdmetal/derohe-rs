@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Chain state transitions — mirrors derohe `blockchain/transaction_execute.go`.
 //!
 //! The pure consensus core that applies a block's transactions to the

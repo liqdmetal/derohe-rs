@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Adversarial proof verification fuzz — the deep security differential.
 
 Extends hardtest_verify with:

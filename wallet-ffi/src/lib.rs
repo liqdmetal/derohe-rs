@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! C-FFI wallet SDK for DERO.
 //!
 //! Exposes wallet functions via `extern "C"` for iOS (Swift bridging) and

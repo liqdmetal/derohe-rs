@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Block serialization and hashing — mirrors derohe `block/block.go` and
 //! `block/miniblock.go`.
 //!

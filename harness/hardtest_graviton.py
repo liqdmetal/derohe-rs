@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Graviton tree adversarial stress — deep trie + cross-tree + collision stress.
 
 Extends hardtest_chain with:

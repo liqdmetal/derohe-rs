@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! FieldVector: vectors of scalars mod n, mirroring derohe
 //! `cryptography/crypto/algebra_fieldvector.go` + `fieldvector.go`.
 //!

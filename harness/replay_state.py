@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """GENESIS-TO-TIP STATE REPLAY — the definitive consensus test.
 
 Applies mainnet blocks sequentially to a graviton balance tree (Rust oracle,

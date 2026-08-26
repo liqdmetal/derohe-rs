@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Clean-room Rust reimplementation of derohe's consensus-critical crypto.
 //!
 //! Written from the DERO reference source + protocol spec, NOT copied from it

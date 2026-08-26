@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! graviton — DERO's merkleized key-value state tree — mirrors
 //! github.com/deroproject/graviton (the balance tree, SC data trees, and the
 //! version root all use this).

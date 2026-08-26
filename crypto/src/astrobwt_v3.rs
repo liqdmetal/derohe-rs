@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! AstroBWTv3 — the current mainnet PoW — mirrors derohe
 //! `astrobwt/astrobwtv3/pow.go` + `rc4.go` + `sa_fast.go`.
 //!

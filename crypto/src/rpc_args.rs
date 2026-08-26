@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! SCDATA argument serialization — mirrors derohe `rpc/rpc.go`
 //! (`Arguments.MarshalBinary` / `UnmarshalBinary`).
 //!

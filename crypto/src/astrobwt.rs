@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! AstroBWT proof-of-work — mirrors derohe `astrobwt/` (POW32).
 //!
 //! Pipeline:

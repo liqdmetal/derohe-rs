@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Wallet-side helpers for building transactions — clean-room port of the
 //! reference walletapi/cryptography helpers (shared secret, user-data
 //! encryption, deterministic r).

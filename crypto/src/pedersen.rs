@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Pedersen generator params + commitments, mirroring derohe
 //! `cryptography/crypto/algebra_pedersen.go` + `generatorparams.go`.
 //!

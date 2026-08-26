@@ -1,8 +1,11 @@
+# SPDX-License-Identifier: BSD-3-Clause
 [package]
 name = "dero-crypto"
 version = "0.1.0"
 edition = "2021"
 description = "Clean-room Rust reimplementation of derohe's consensus crypto (differential-tested against the Go reference)"
+license = "BSD-3-Clause"
+repository = "https://github.com/liqdmetal/derohe-rs"
 
 [dependencies]
 tiny-keccak = { version = "2", features = ["keccak", "sha3"] }

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Differential: Go wallet BuildTxEmap vs Rust tx_builder — byte comparison.
 
 Uses the simnode's BuildTxEmap RPC which returns the EXACT balances the

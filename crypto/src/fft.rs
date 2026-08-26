@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Number-theoretic FFT + convolution, mirroring derohe
 //! `cryptography/crypto/fieldvector.go` (fft_FieldVector,
 //! fft_GeneratorVector, Convolution).

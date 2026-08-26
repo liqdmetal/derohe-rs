@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Differential: Go wallet BuildTx vs Rust tx_builder — byte comparison.
 
 The simnode's DERO.BuildTx builds a real transfer with the Go wallet

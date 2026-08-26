@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """HARD TEST: multi-block accumulation + random mixed-op property test.
 
 Applies 20 sequential blocks (miner_tx + 2 txs each, hash-aligned

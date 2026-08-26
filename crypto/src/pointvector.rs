@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! PointVector: vectors of G1 points, mirroring derohe
 //! `cryptography/crypto/algebra_pointvector.go`.
 //! Supports the ops needed by the FFT and inner-product argument.

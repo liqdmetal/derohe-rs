@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Statement serialization — mirrors derohe `protocol_structures.go`.
 //!
 //! Wire format (after `Statement.Serialize`):

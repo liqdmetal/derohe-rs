@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """DVM edge cases — parse + basic execution differential.
 
 Tests the DVM parser (dvm_parse) and basic execution (dvm_run) against

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Keccak wrappers matching derohe's `cryptography/crypto/keccak.go`.
 //!
 //! derohe uses *legacy* Keccak (original padding 0x01), NOT NIST SHA3-256

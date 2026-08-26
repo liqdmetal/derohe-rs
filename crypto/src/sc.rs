@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! SC execution plumbing — mirrors derohe `dvm/sc.go` + `dvm/simulator.go`.
 //!
 //! Wraps graviton trees so SC writes can be discarded on error, runs the DVM

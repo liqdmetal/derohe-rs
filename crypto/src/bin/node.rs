@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! dero-node — a runnable Rust DERO node built on the byte-verified
 //! consensus core (dero-crypto).
 //!

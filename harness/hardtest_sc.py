@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """SC install/call differential test.
 
 Builds a full SC_INSTALL tx (real proof + canonical-CBOR SCDATA with the SC

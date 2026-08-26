@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Transaction serialization edge cases — multi-payload, truncation, version edges.
 
 Extends Phase G with:

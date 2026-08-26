@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Inner-product argument (Bulletproofs-style), mirroring derohe
 //! `cryptography/crypto/proof_innerproduct.go`.
 //!

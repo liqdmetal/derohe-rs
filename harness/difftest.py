@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Differential test harness: derohe Go reference vs clean-room Rust.
 
 Generates deterministic random vectors, feeds the SAME JSONL request stream to

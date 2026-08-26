@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Rust wallet: derive keys from recovery words, build a real NORMAL
 //! transfer, and broadcast it to the daemon. End-to-end proof that the
 //! Rust implementation can spend on a live DERO network.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Aggregate bulletproof (range + ring proof), mirroring derohe
 //! `cryptography/crypto/proof_generate.go` + `proof_verify.go`.
 //!

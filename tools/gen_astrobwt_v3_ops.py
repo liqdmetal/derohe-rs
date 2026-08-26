@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Generate the AstroBWTv3 op-switch (Rust) from the Go reference pow.go.
 
 Each `case N:` block in pow.go is a 4-5 line sequence of byte operations on

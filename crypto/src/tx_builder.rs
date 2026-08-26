@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Transaction builder — clean-room port of the reference
 //! walletapi/transaction_build.go BuildTransaction + TransferPayload0 core.
 

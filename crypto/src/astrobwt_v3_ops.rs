@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 // Generated from the Go reference astrobwt/astrobwtv3/pow.go — do not edit.
 
 // The op-switch body: applied to s[pos1..pos2] (Go: step_3).

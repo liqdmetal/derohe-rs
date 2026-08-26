@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Mainnet replay: verify the Rust reimplementation against the LIVE DERO chain.
 
 For a set of heights, fetch the raw block (DERO.GetBlock -> 'blob') plus the

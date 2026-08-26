@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Chain-level PoW verification: the Rust AstroBWTv3 must reproduce a VALID
 PoW for real mainnet blocks (post-HF2), and the difficulty target check must
 pass for the mined miniblock at the chain's own difficulty.

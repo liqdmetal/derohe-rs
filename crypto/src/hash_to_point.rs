@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Try-and-increment hash-to-curve, mirroring derohe
 //! `cryptography/crypto/hashtopoint.go` exactly:
 //!   x = seed mod n            (reduced by GROUP order)

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+#
 """Bulletproof verify-path FUZZ — the security-critical differential.
 
   VALID:   50 randomized valid txs (ring 2, varied values/fees/burn/balances)

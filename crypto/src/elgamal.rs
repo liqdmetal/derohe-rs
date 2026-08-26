@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Account-model ElGamal encryption, mirroring derohe
 //! `cryptography/crypto/algebra_elgamal.go`.
 //!

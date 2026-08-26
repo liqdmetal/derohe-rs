@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! WASM light client for DERO — pure crypto + serialization, no file I/O or networking.
 //!
 //! Exposes wallet functions via wasm-bindgen:

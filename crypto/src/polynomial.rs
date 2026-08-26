@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
 //! Polynomial arithmetic, mirroring derohe `cryptography/crypto/polynomial.go`.
 //!
 //! Quirk: `Polynomial.Mul` only correctly multiplies by a binomial (x + c)
