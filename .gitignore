@@ -1,17 +1,20 @@
-# DERO reference source (fetched from GitHub tarball; do not commit)
+# DERO reference source (differential-test oracle; do not commit)
 derohe-reference/
 # Rust build artifacts
 crypto/target/
+wallet-ffi/target/
+wasm-light-client/target/
+# Generated WASM bindings (regenerate with wasm-pack)
+wasm-light-client/pkg/
 # Go build artifacts
 oracle/oracle.exe
 oracle/oracle
 # Python cache
 __pycache__/
 *.pyc
-# harness debug request dumps (regenerated deterministically)
+# harness debug request dumps (regenerated deterministically by difftest.py)
 harness/phase_*_requests.json
 harness/phase_*_extra.json
+# built binaries
 bin/*.exe
 target/
-wallet-ffi/target/
-wasm-light-client/target/
