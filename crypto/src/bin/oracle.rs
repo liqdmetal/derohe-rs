@@ -1009,6 +1009,52 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 dero_crypto::wallet::encrypt_decrypt_user_data(&k, &mut ks);
                 Ok(json!({"keystream": hex::encode(ks)}))
             }
+            "proof_verify_tx" => {
+                // self-verify a full tx blob's proofs (expand-free: the
+                // builder's in-memory statement is complete)
+                let b = hex_decode(&s("blob")?)?;
+                let tx = dero_crypto::transaction::Transaction::deserialize(&b, 2)
+                    .or_else(|_| dero_crypto::transaction::Transaction::deserialize(&b, 3))
+                    .map_err(|e| format!("deserialize: {e}"))?;
+                let bpp = tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(2);
+                let txid = tx.get_hash(bpp);
+                let mut scid_map: std::collections::HashMap<[u8; 32], i32> = std::collections::HashMap::new();
+                let mut all_ok = true;
+                for (i, p) in tx.payloads.iter().enumerate() {
+                    let index = *scid_map.get(&p.scid).unwrap_or(&0);
+                    if let Some(proof) = &p.proof {
+                        let ok = dero_crypto::bulletproof::verify(
+                            &p.scid, index, &p.statement, proof, &txid, p.burn_value,
+                        );
+                        if !ok {
+                            all_ok = false;
+                        }
+                    }
+                    scid_map.insert(p.scid, index + 1);
+                }
+                Ok(json!({"ok": all_ok}))
+            }
+            "balance_decode" => {
+                // decode an ElGamal balance with the wallet secret (BSGS)
+                let bal_b = hex_decode(&s("balance")?)?;
+                let ebal = dero_crypto::elgamal::ElGamal::deserialize(&bal_b)
+                    .map_err(|e| format!("elgamal: {e}"))?;
+                let words: Vec<String> = s("words")?
+                    .split_whitespace()
+                    .map(|w| w.to_string())
+                    .collect();
+                let seed = dero_crypto::mnemonics::words_to_key(&words)
+                    .map_err(|e| format!("words: {e}"))?;
+                let mut le = [0u8; 32];
+                for i in 0..32 {
+                    le[i] = seed[31 - i];
+                }
+                let secret = ark_bn254::Fr::from_le_bytes_mod_order(&le);
+                match dero_crypto::wallet::decode_balance(&ebal, &secret, 44) {
+                    Ok(b) => Ok(json!({"balance": b})),
+                    Err(e) => Err(e),
+                }
+            }
             "proof_verify" => {
                 // verify a proof against a statement + txid (cross-check)
                 let stmt_b = hex_decode(&s("stmt")?)?;

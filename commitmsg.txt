@@ -1,0 +1,16 @@
+feat(harness): mainnet dry-run + submit — real txs accepted by the live node
+
+- dryrun_mainnet.py: read-only build against live mainnet state (ring,
+  balances, roothash from the public node); txid byte-identical Go==Rust
+- submit_mainnet.py: builds and BROADCASTS a real dust tx via
+  DERO.SendRawTransaction; the daemon ACCEPTED it twice
+  (status OK, txid returned) — the Rust wallet's tx passes the live
+  mainnet mempool verifier
+- oracle: new ops balance_decode (BSGS) + proof_verify_tx
+- KEY FINDING: mainnet wallet txs use bpp=3 (max_bits=24, 24-bit
+  pointers), NOT the simnode's bpp=2 — the pointer-length mismatch was
+  the "leaf not found" root cause
+- also: roothash+blid must come from ONE consistent state fetch
+  (mismatched pairs caused nonce-verification failures)
+- TX_VALIDITY_HEIGHT = 11: the tx must reference tip-3 (inside the
+  window) or it expires in the mempool
