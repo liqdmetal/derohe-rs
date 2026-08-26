@@ -1,12 +1,6 @@
-feat(node): integrated wallet mode — DERO.Transfer from the node's own state
+feat(node): DERO.Transfer sc_code — deploy SCs from the node wallet
 
-- --seed <words>: the node derives the wallet secret; the RPC server
-  shares it, so DERO.Transfer works without any external wallet
-- DERO.Transfer {dest, amount}: builds the ring from the node's own
-  balance tree, decodes the sender balance locally (BSGS), computes
-  roothash/blid/height from its own state, builds + self-verifies +
-  mempool-adds the tx — one RPC, fully internal
-- parse_addr: check the bech32 prefix FIRST (some addresses are exactly
-  66 chars and collided with the hex-key branch)
-- PROVEN: DERO.Transfer(25) -> mined in block 191 -> wdst balance moved,
-  all inside the Rust node
+- DERO.Transfer accepts an optional sc_code param: builds an SC_INSTALL
+  tx (SC_ACTION=1 + SC_CODE, ring size 4, 0-value transfer to a ring
+  member) — one RPC deploys a contract entirely from the node's state
+- PROVEN: DERO.Transfer(sc_code) -> mined in block 37 of the Rust chain

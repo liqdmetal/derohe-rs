@@ -583,24 +583,29 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
     let st = store.lock().unwrap();
     let result = match method.as_str() {
         "DERO.Transfer" => {
-            // wallet mode: build + submit a NORMAL transfer from the node's
-            // own balance tree (needs --seed). The ring, balances, roothash,
-            // blid and height all come from OUR state — no external fetch.
+            // wallet mode: build + submit a NORMAL or SC-install transfer
+            // from the node's own balance tree (needs --seed). The ring,
+            // balances, roothash, blid and height all come from OUR state.
             let (secret, self_addr) = match (miner.secret, miner.address) {
                 (Some(s), a) => (s, a),
                 _ => return json_err_id(-32000, "node has no wallet (start with --seed)", id),
             };
             let dest = params["dest"].as_str().unwrap_or("");
             let amount: u64 = params["amount"].as_u64().unwrap_or(0);
+            // SC install: params.sc_code present -> SC_ACTION=1 + SC_CODE
+            let sc_code = params["sc_code"].as_str().unwrap_or("");
+            let is_sc = !sc_code.is_empty();
             let dest_comp: [u8; 33] = match parse_addr(dest) {
                 Ok(c) => c,
                 Err(e) => return json_err_id(-32000, &format!("bad dest: {e}"), id),
             };
-            if self_addr == dest_comp {
+            if !is_sc && self_addr == dest_comp {
                 return json_err_id(-32000, "cannot send to self", id);
             }
             // ring = [self, dest, others] — all distinct, from the tree
             let mut ring_members: Vec<[u8; 33]> = vec![self_addr, dest_comp];
+            // SC installs use ring size 4 (like the reference wallet)
+            let ring_size = if is_sc { 4 } else { 8 };
             for k in dero_crypto::graviton::tree_keys(&st.balance) {
                 if k.len() != 33 {
                     continue;
@@ -611,12 +616,12 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                     continue;
                 }
                 ring_members.push(kk);
-                if ring_members.len() >= 8 {
+                if ring_members.len() >= ring_size {
                     break;
                 }
             }
-            if ring_members.len() < 8 {
-                return json_err_id(-32000, &format!("need 8 ring members, got {}", ring_members.len()), id);
+            if ring_members.len() < ring_size {
+                return json_err_id(-32000, &format!("need {ring_size} ring members, got {}", ring_members.len()), id);
             }
             // balances from the tree + BSGS decode for self
             let mut ring: Vec<RingMember> = Vec::new();
@@ -654,6 +659,23 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 scid: [0u8; 32],
                 payload_rpc: Vec::new(),
             }];
+            // SC install: SC_ACTION=1 (SC_INSTALL) + SC_CODE
+            let scdata = if is_sc {
+                dero_crypto::rpc_args::Arguments(vec![
+                    dero_crypto::rpc_args::Argument {
+                        name: dero_crypto::rpc_args::SC_ACTION.to_string(),
+                        data_type: dero_crypto::rpc_args::DATA_UINT64,
+                        value: dero_crypto::rpc_args::ArgValue::U64(1),
+                    },
+                    dero_crypto::rpc_args::Argument {
+                        name: dero_crypto::rpc_args::SC_CODE.to_string(),
+                        data_type: dero_crypto::rpc_args::DATA_STRING,
+                        value: dero_crypto::rpc_args::ArgValue::Str(sc_code.to_string()),
+                    },
+                ])
+            } else {
+                dero_crypto::rpc_args::Arguments::default()
+            };
             let tx = match build_transaction(
                 &transfers,
                 &[ring],
@@ -661,7 +683,7 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 1,
                 &blid,
                 height,
-                &dero_crypto::rpc_args::Arguments::default(),
+                &scdata,
                 &roothash,
                 9,
                 0,
