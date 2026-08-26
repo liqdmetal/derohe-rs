@@ -952,6 +952,37 @@ func handle(id int, op string, raw json.RawMessage) {
 	}
 
 	switch op {
+	case "shared_key_debug":
+		rStr, _ := s(in, "r")
+		rb, err := unhex(rStr)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		r := new(big.Int).SetBytes(rb)
+		recvStr, _ := s(in, "receiver")
+		recvb, err := unhex(recvStr)
+		if err != nil {
+			fail(id, err)
+			return
+		}
+		var recv bn256.G1
+		if err := recv.DecodeCompressed(recvb); err != nil {
+			fail(id, err)
+			return
+		}
+		// GenerateSharedSecret(r, recv)
+		shared := new(bn256.G1).ScalarMult(&recv, r)
+		sharedComp := shared.EncodeCompressed()
+		sharedKey := crypto.Keccak256(sharedComp[:])
+		// key = Keccak256(shared_key, recv.EncodeCompressed())
+		encKey := crypto.Keccak256(sharedKey[:], recvb)
+		ok(id, map[string]interface{}{
+			"shared_point": fmt.Sprintf("%x", sharedComp),
+			"shared_key":   hex.EncodeToString(sharedKey[:]),
+			"enc_key":      hex.EncodeToString(encKey[:]),
+			"enc_key_raw":  fmt.Sprintf("%v", encKey[:]),
+		})
 	case "calc_r_debug":
 		rhStr, _ := s(in, "roothash")
 		roothash, err := unhex(rhStr)

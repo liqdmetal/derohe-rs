@@ -88,31 +88,53 @@ pub fn build_transaction(
             return Err("sender and receiver must have different parity".into());
         }
 
-        // publickeylist in INPUT order (already Go's statement order): the
-        // sender's key at witness_index[0], the RECEIVER's (destination) key
-        // at witness_index[1], all others = their ring member's key
-        let receiver_comp = crate::curve::decode_compressed(&ring[receiver_index].public_key)
+        // publickeylist + ebalances_list built by the witness_index switch,
+        // exactly like Go: the sender's key+balance (ring[0]) at position
+        // witness_index[0], the receiver's key+balance (ring[1]) at position
+        // witness_index[1], and the anonset members (ring[2:]) in order.
+        // The INPUT ring must be [self, receiver, anonset...] with matching
+        // balances.
+        let sender_comp = encode_compressed(&sender);
+        let receiver_comp = crate::curve::decode_compressed(&ring[1].public_key)
             .map_err(|e| format!("receiver pubkey: {e}"))?;
+        let mut anonset: Vec<&RingMember> = ring[2..].iter().collect();
         for i in 0..ring.len() {
-            let pk = if i == witness_index[0] {
-                sender // our own key (derive from secret)
+            let (pk, bal) = if i == witness_index[0] {
+                (sender, ring[0].balance.clone())
             } else if i == witness_index[1] {
-                receiver_comp // the destination's key
+                (receiver_comp, ring[1].balance.clone())
             } else {
-                crate::curve::decode_compressed(&ring[i].public_key)
-                    .map_err(|e| format!("ring pubkey {i}: {e}"))?
+                let m = anonset.remove(0);
+                (
+                    crate::curve::decode_compressed(&m.public_key)
+                        .map_err(|e| format!("anonset pubkey: {e}"))?,
+                    m.balance.clone(),
+                )
             };
+            let _ = sender_comp;
             publickeylist.push(pk);
-            ebalances_list.push(ring[i].balance.clone());
+            ebalances_list.push(bal);
         }
 
         // deterministic r
         let r = calc_r(roothash, &publickeylist, sender_secret);
 
         // fees: only on the base asset (SCID zero), once
+        // Go: fees = (len(transfers)+2) * (FEE_PER_KB * (ringsize/16 + wallet.multiplier))
+        //      + scdata_marshal_len * 15 / 10
         let mut fees_for_asset = 0u64;
         if transfer.scid == [0u8; 32] {
-            fees_for_asset = fees;
+            if fees == 0 {
+                let ring = publickeylist.len();
+                let mult = 2.0f64; // wallet FeesMultiplier (from recovery words)
+                let base = (20.0f64 * ((ring as f64 / 16.0).floor() + mult)) as u64;
+                fees_for_asset = (transfers.len() as u64 + 2) * base;
+                // scdata marshal length: CBOR of the args (0xA0 = 1 byte for empty)
+                let sc_len = if scdata.len() == 0 { 1 } else { scdata.len() as u64 * 2 };
+                fees_for_asset += (sc_len * 15) / 10;
+            } else {
+                fees_for_asset = fees;
+            }
         }
 
         // commitments C[i]
@@ -196,10 +218,18 @@ pub fn build_transaction(
             let receiver_pk = publickeylist[witness_index[1]];
             let shared = generate_shared_secret(&r, &receiver_pk);
             let mut data = vec![0u8; 145];
-            // payload: [receiver_index byte][packed rpc]
+            // payload: [sender_pos byte][CBOR(Arguments)][zero pad to 145]
+            // Go: data = Payload_RPC.CheckPack(144) = MarshalBinary() of the
+            // rpc.Arguments (CBOR map) padded with zeros. Empty args = 0xA0
+            // (CBOR empty map).
             data[0] = witness_index[0] as u8;
-            let n = transfer.payload_rpc.len().min(144);
-            data[1..1 + n].copy_from_slice(&transfer.payload_rpc[..n]);
+            let cbor = if transfer.payload_rpc.is_empty() {
+                vec![0xA0u8] // CBOR empty map
+            } else {
+                transfer.payload_rpc.clone()
+            };
+            let n = cbor.len().min(144);
+            data[1..1 + n].copy_from_slice(&cbor[..n]);
             encrypt_decrypt_user_data(
                 &crate::keccak::keccak256(&[&shared[..], &encode_compressed(&receiver_pk)[..]].concat()),
                 &mut data,

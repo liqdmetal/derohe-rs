@@ -1,19 +1,17 @@
-feat(wallet): Rust tx builder — structural byte-match with Go, r verified
+feat(wallet): Rust tx builder byte-identical to Go — statement verified
 
 The Rust wallet builder (tx_builder.rs + wallet.rs) now produces a
-complete NORMAL transfer byte-identical in STRUCTURE to the Go wallet:
+complete NORMAL transfer whose statement is byte-for-byte identical to
+the Go reference wallet's:
 
-- tx length 2562 = 2562 (statement layout, pointers, bpp all match)
-- statement: power=3 bpp=2, D at 220, 16-byte pointers (blake2s), C at
-  269, roothash — all at identical offsets
-- deterministic r: VERIFIED byte-identical Go vs Rust
-  (calc_r_debug differential, after fixing curve_order to the group
-  order r = 30644e...000001, not the field modulus p)
-- witness indices recovered from Go's statement (sender/receiver
-  positions), parity constraint enforced
-- XChaCha20 keystream verified byte-identical to golang.org/x/crypto
+- r, commitments C, pointers, D, fees, roothash, payload encryption —
+  all match (differential harness diff_wallet_tx2.py: STATEMENT 0 diffs)
+- mnemonic -> keys derivation matches on-chain registration
+- the emap (ring balances) ground truth comes from the instrumented
+  wallet (LastBuildEmap), fed atomically with the built tx
+- key findings: curve order (not field modulus) for ReducedHash; CBOR
+  0xA0 empty-map byte in the payload; rpc_type=0; witness_index parity;
+  statement wire format omits CLn/CRn (Go comments them out)
 
-Remaining: the encrypted RPCPayload's first/last byte differ (shared
-secret receiver-key nuance) — a 2-byte diff in a 145-byte encrypted
-region; everything else matches. The wallet helper suite is complete:
-mnemonic, keygen, shared secret, user-data encrypt, calc_r/calc_u.
+Only the proof region differs (fresh random draws per build) — it still
+verifies identically over the same statement.
