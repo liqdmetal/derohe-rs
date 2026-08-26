@@ -73,6 +73,127 @@ impl ChainStore {
         }
     }
 
+    /// Persist the chain state to `dir` (trees + blocks). Called after each
+    /// applied block. Format: JSON lines (robust, debuggable).
+    fn save(&self, dir: &str) -> Result<(), String> {
+        use std::io::Write;
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;
+        // balance + sc_meta trees
+        let mut f = std::fs::File::create(format!("{dir}/balance.jsonl"))
+            .map_err(|e| format!("open balance: {e}"))?;
+        for k in dero_crypto::graviton::tree_keys(&self.balance) {
+            if let Some(v) = self.balance.get(&k) {
+                writeln!(f, "{}", serde_json::json!({"k": hex::encode(&k), "v": hex::encode(&v)}))
+                    .map_err(|e| format!("write: {e}"))?;
+            }
+        }
+        let mut f = std::fs::File::create(format!("{dir}/sc_meta.jsonl"))
+            .map_err(|e| format!("open meta: {e}"))?;
+        for k in dero_crypto::graviton::tree_keys(&self.sc_meta) {
+            if let Some(v) = self.sc_meta.get(&k) {
+                writeln!(f, "{}", serde_json::json!({"k": hex::encode(&k), "v": hex::encode(&v)}))
+                    .map_err(|e| format!("write: {e}"))?;
+            }
+        }
+        // blocks (serialized blobs + raw tx blobs + txids)
+        let mut fb = std::fs::File::create(format!("{dir}/blocks.jsonl"))
+            .map_err(|e| format!("open blocks: {e}"))?;
+        for (bi, (blk, _txs)) in self.blocks.iter().enumerate() {
+            let tids: Vec<String> = self
+                .txids
+                .get(bi)
+                .map(|v| v.iter().map(hex::encode).collect())
+                .unwrap_or_default();
+            let raws: Vec<String> = self
+                .raw_txs
+                .get(bi)
+                .map(|v| v.iter().map(hex::encode).collect())
+                .unwrap_or_default();
+            writeln!(
+                fb,
+                "{}",
+                serde_json::json!({
+                    "blob": hex::encode(blk.serialize(false)),
+                    "txids": tids,
+                    "raws": raws,
+                })
+            )
+            .map_err(|e| format!("write block: {e}"))?;
+        }
+        // height
+        std::fs::write(
+            format!("{dir}/height"),
+            self.height.to_string(),
+        )
+        .map_err(|e| format!("write height: {e}"))?;
+        Ok(())
+    }
+
+    /// Load chain state from `dir` (trees + blocks). Returns the number of
+    /// blocks loaded, or 0 if nothing is there.
+    fn load(&mut self, dir: &str) -> Result<u64, String> {
+        use std::io::BufRead;
+        let bpath = format!("{dir}/balance.jsonl");
+        let mpath = format!("{dir}/sc_meta.jsonl");
+        let blpath = format!("{dir}/blocks.jsonl");
+        let hpath = format!("{dir}/height");
+        if !std::path::Path::new(&bpath).exists() {
+            return Ok(0);
+        }
+        // trees
+        for (path, tree) in [(&bpath, &mut self.balance), (&mpath, &mut self.sc_meta)] {
+            let f = std::fs::File::open(path).map_err(|e| format!("open {path}: {e}"))?;
+            for line in std::io::BufReader::new(f).lines() {
+                let line = line.map_err(|e| format!("read: {e}"))?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let v: serde_json::Value = serde_json::from_str(&line).map_err(|e| format!("json: {e}"))?;
+                let k = hex_decode(v["k"].as_str().unwrap_or(""))?;
+                let val = hex_decode(v["v"].as_str().unwrap_or(""))?;
+                tree.put(&k, &val);
+            }
+        }
+        // blocks
+        let f = std::fs::File::open(&blpath).map_err(|e| format!("open blocks: {e}"))?;
+        for line in std::io::BufReader::new(f).lines() {
+            let line = line.map_err(|e| format!("read blocks: {e}"))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&line).map_err(|e| format!("json: {e}"))?;
+            let blob = hex_decode(v["blob"].as_str().unwrap_or(""))?;
+            let blk = Block::deserialize(&blob).map_err(|e| format!("block deser: {e}"))?;
+            let tids: Vec<[u8; 32]> = v["txids"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| hex_decode(x.as_str().unwrap_or("")).ok())
+                        .filter_map(|b| b.try_into().ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let raws: Vec<Vec<u8>> = v["raws"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| hex_decode(x.as_str().unwrap_or("")).ok()).collect())
+                .unwrap_or_default();
+            // decode the txs from the raw blobs for verification use
+            let txs: Vec<Transaction> = raws
+                .iter()
+                .filter_map(|r| Transaction::deserialize(r, 2).or_else(|_| Transaction::deserialize(r, 3)).ok())
+                .collect();
+            self.blocks.push((blk, txs));
+            self.txids.push(tids);
+            self.raw_txs.push(raws);
+        }
+        self.height = std::fs::read_to_string(&hpath)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        self.snapshot();
+        Ok(self.blocks.len() as u64)
+    }
+
     /// Snapshot the current state (called after every applied block).
     fn snapshot(&mut self) {
         let rh = self.roothash();
@@ -1092,6 +1213,7 @@ fn main() {
     let mut simulator = true; // simulator mode: skip proof verification (matches reference simnode laxity)
     let mut miner_addr = String::new();
     let mut seed_words = String::new();
+    let mut data_dir = String::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1102,9 +1224,10 @@ fn main() {
             "--mine-interval-ms" => { i += 1; mine_interval_ms = args[i].parse().unwrap_or(2000); }
             "--miner" => { i += 1; miner_addr = args[i].clone(); }
             "--seed" => { i += 1; seed_words = args[i].clone(); }
+            "--data-dir" => { i += 1; data_dir = args[i].clone(); }
             "--mainnet" => simulator = false, // verify proofs strictly
             "--help" => {
-                println!("dero-node [--peer URL] [--peers a,b] [--port N] [--mine] [--miner ADDR] [--seed WORDS] [--mine-interval-ms N] [--mainnet]");
+                println!("dero-node [--peer URL] [--peers a,b] [--port N] [--mine] [--miner ADDR] [--seed WORDS] [--data-dir DIR] [--mine-interval-ms N] [--mainnet]");
                 return;
             }
             _ => {}
@@ -1118,7 +1241,24 @@ fn main() {
     let store = Arc::new(Mutex::new(ChainStore::new()));
     let mempool = Arc::new(Mutex::new(Mempool::new()));
 
-    // sync from peer
+    // load persisted state (if any) — skip the genesis re-seed + replay
+    let loaded = if !data_dir.is_empty() {
+        let mut st = store.lock().unwrap();
+        match st.load(&data_dir) {
+            Ok(n) => {
+                println!("loaded {n} blocks from {data_dir} (height {})", st.height);
+                n
+            }
+            Err(e) => {
+                eprintln!("load error: {e}");
+                0
+            }
+        }
+    } else {
+        0
+    };
+
+    // sync from peer (incremental: only pulls blocks above our height)
     {
         let mut st = store.lock().unwrap();
         match sync_from_peer(&mut st, &peer, simulator) {
@@ -1126,6 +1266,12 @@ fn main() {
             Err(e) => {
                 eprintln!("sync error: {e}");
                 std::process::exit(1);
+            }
+        }
+        // persist after the initial sync if we loaded or synced anything
+        if !data_dir.is_empty() && (loaded > 0 || st.blocks.len() > 1) {
+            if let Err(e) = st.save(&data_dir) {
+                eprintln!("save error: {e}");
             }
         }
     }
@@ -1258,6 +1404,11 @@ fn main() {
                     st.snapshot();
                     st.txids.push(blk.tx_hashes.clone());
                     st.raw_txs.push(raw_txs); // original wire blobs (bpp-correct)
+                    if !data_dir.is_empty() {
+                        if let Err(e) = st.save(&data_dir) {
+                            eprintln!("save error: {e}");
+                        }
+                    }
                     println!("mined block h{} {}", blk.height, hex::encode(&blk.get_hash()[..8]));
                 }
                 Err(e) => eprintln!("mine apply err: {e}"),

@@ -1,10 +1,8 @@
-feat(node): multi-asset transfer plumbing — DERO.Transfer accepts scid
+feat(node): disk persistence — --data-dir survives restarts
 
-- DERO.Transfer {dest, amount, scid}: token transfers (scid != 0) — the
-  transfer's SCID flows into the builder's C commitments; balances are
-  read from the node's per-SCID token trees when present, else the base
-  tree (reference-compatible fallback)
-- ChainStore gains token_trees: HashMap<scid, Tree> (maintained as SC txs
-  execute; currently read-only in Transfer — full token-tree population
-  lands with SC data-tree persistence)
-- base-asset path regression: PASS (transfer accepted + mined)
+- --data-dir DIR: the node persists balance + sc_meta trees, every block
+  blob, txids, and raw tx blobs as JSONL after each applied block
+- on start: load the persisted state (trees + blocks), then sync
+  incrementally from peers (only blocks above the stored height)
+- PROVEN: node mined to h49 -> killed -> restarted -> "loaded 50 blocks
+  from ... (height 49)", "synced 0 blocks", continued mining at h50
