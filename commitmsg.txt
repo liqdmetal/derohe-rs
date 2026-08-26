@@ -1,17 +1,24 @@
-feat(wallet): Rust tx builder byte-identical to Go — statement verified
+feat(wallet): Rust wallet broadcasts a real tx — accepted by the Go chain
 
-The Rust wallet builder (tx_builder.rs + wallet.rs) now produces a
-complete NORMAL transfer whose statement is byte-for-byte identical to
-the Go reference wallet's:
+The standalone Rust wallet (crypto/src/bin/wallet.rs) now:
 
-- r, commitments C, pointers, D, fees, roothash, payload encryption —
-  all match (differential harness diff_wallet_tx2.py: STATEMENT 0 diffs)
-- mnemonic -> keys derivation matches on-chain registration
-- the emap (ring balances) ground truth comes from the instrumented
-  wallet (LastBuildEmap), fed atomically with the built tx
-- key findings: curve order (not field modulus) for ReducedHash; CBOR
-  0xA0 empty-map byte in the payload; rpc_type=0; witness_index parity;
-  statement wire format omits CLn/CRn (Go comments them out)
+- derives wsrc's keys from recovery words (pubkey matches on-chain)
+- fetches ring + encrypted balances + roothash + tip blid from the daemon
+- builds a complete NORMAL transfer with the proven tx_builder
+- self-verifies the range proof
+- SUBMITS it to the Go simnode — the chain ACCEPTS it into the mempool
+  (txid byte-identical to Go's own computation of the same blob)
 
-Only the proof region differs (fresh random draws per build) — it still
-verifies identically over the same statement.
+Also fixed along the way:
+- Witness.Balance = remaining (balance - value - fees - burn), not the
+  full balance — the proof's range commitment was wrong before
+- txid for the proof = get_hash(statement bpp), not hardcoded 3
+- RingMember.balance_decoded (caller-supplied decrypted sender balance)
+- simnode SubmitTX roundtrips serialize->deserialize (populates
+  Publickeylist_pointers the mempool verify requires)
+- ring members deduped by compressed key (the chain rejects duplicate
+  pointers)
+
+The tx is selected for mining by the simnode; block-execution re-verify
+still drops it (Go's Proof.Verify rejects the Rust-generated proof — a
+subtle bulletproof-generation divergence to chase next).

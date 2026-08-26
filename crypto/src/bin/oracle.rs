@@ -735,6 +735,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     public_key: self_comp,
                     balance: dero_crypto::elgamal::ElGamal::deserialize(&sb)
                         .map_err(|e| format!("self elgamal: {e}"))?,
+                    balance_decoded: 0,
                 });
                 // member 1 = receiver (dest) with emap[1]
                 let mut dk = [0u8; 33];
@@ -745,6 +746,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     public_key: dk,
                     balance: dero_crypto::elgamal::ElGamal::deserialize(&rb1)
                         .map_err(|e| format!("recv elgamal: {e}"))?,
+                    balance_decoded: 0,
                 });
                 // members 2+ = anonset with emap[2:]
                 let mut i = 2;
@@ -757,6 +759,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     members.push(dero_crypto::tx_builder::RingMember {
                         public_key: a,
                         balance: bal,
+                    balance_decoded: 0,
                     });
                     i += 1;
                 }
@@ -839,6 +842,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 members.push(dero_crypto::tx_builder::RingMember {
                     public_key: self_comp,
                     balance: dero_crypto::elgamal::ElGamal::deserialize(&sb).map_err(|e| e)?,
+                    balance_decoded: 0,
                 });
                 let mut dk = [0u8; 33];
                 dk.copy_from_slice(&hex_decode(&dest_key_hex)?);
@@ -846,6 +850,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 members.push(dero_crypto::tx_builder::RingMember {
                     public_key: dk,
                     balance: dero_crypto::elgamal::ElGamal::deserialize(&rb1).map_err(|e| e)?,
+                    balance_decoded: 0,
                 });
                 let ring: Vec<String> = s("ring")?.split(',').map(|x| x.to_string()).collect();
                 let mut i = 2;
@@ -856,6 +861,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     members.push(dero_crypto::tx_builder::RingMember {
                         public_key: a,
                         balance: parse_bal(&ring_bal[i])?,
+                    balance_decoded: 0,
                     });
                     i += 1;
                 }
@@ -995,6 +1001,27 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let mut ks = vec![0u8; 145];
                 dero_crypto::wallet::encrypt_decrypt_user_data(&k, &mut ks);
                 Ok(json!({"keystream": hex::encode(ks)}))
+            }
+            "proof_verify" => {
+                // verify a proof against a statement + txid (cross-check)
+                let stmt_b = hex_decode(&s("stmt")?)?;
+                let (stmt, _used) = dero_crypto::statement::Statement::deserialize(&stmt_b)
+                    .map_err(|e| format!("stmt: {e}"))?;
+                let proof_b = hex_decode(&s("proof")?)?;
+                let proof = dero_crypto::bulletproof::deserialize(&proof_b, stmt.publickeylist.len().max(1).ilog2() as usize)
+                    .map_err(|e| format!("proof: {e}"))?;
+                let txid = hex_decode(&s("txid")?)?;
+                let mut txid_a = [0u8; 32];
+                txid_a.copy_from_slice(&txid);
+                let scid = hex_decode(&s("scid")?)?;
+                let mut scid_a = [0u8; 32];
+                scid_a.copy_from_slice(&scid);
+                let index: i32 = s("index")?.parse().map_err(|e| format!("index: {e}"))?;
+                let burn: u64 = s("burn")?.parse().map_err(|e| format!("burn: {e}"))?;
+                let ok = dero_crypto::bulletproof::verify(
+                    &scid_a, index, &stmt, &proof, &txid_a, burn,
+                );
+                Ok(json!({"ok": ok}))
             }
             "keccak256" | "keccak512" => {
                 let data = hex_decode(&s("data")?)?;

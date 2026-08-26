@@ -28,6 +28,9 @@ pub struct Transfer {
 pub struct RingMember {
     pub public_key: [u8; 33],
     pub balance: ElGamal,
+    /// the sender's DECRYPTED balance (supplied by the caller for the
+    /// witness; the standalone wallet fetches it via the daemon)
+    pub balance_decoded: u64,
 }
 
 /// Build a complete NORMAL (or SC) transaction.
@@ -194,12 +197,21 @@ pub fn build_transaction(
         };
 
         // witness: (secret, r, value, balance - value - fees - burn, index)
-        let sender_balance = decode_balance(&ebalances_list[witness_index[0]], sender_secret)?;
+        // Go's Witness.Balance = "whatever is the amount left after transfer"
+        // The sender balance is supplied by the caller (RingMember.balance_decoded)
+        // to avoid an infeasible discrete log in the standalone wallet.
+        let sender_balance = ring[0].balance_decoded;
+        let fees_this = if transfer.scid == [0u8; 32] { fees_for_asset } else { 0 };
+        let remaining = sender_balance
+            .checked_sub(value)
+            .and_then(|v| v.checked_sub(fees_this))
+            .and_then(|v| v.checked_sub(burn_value))
+            .ok_or("insufficient balance")?;
         let witness = Witness {
             secret_key: *sender_secret,
             r,
             transfer_amount: value,
-            balance: sender_balance,
+            balance: remaining,
             index: [witness_index[0], witness_index[1]],
         };
         witness_list.push(witness);
@@ -247,7 +259,8 @@ pub fn build_transaction(
         let scid = tx.payloads[t].scid;
         let scid_index = scid_map.get(&scid).copied().unwrap_or(0);
         let u = calc_u(roothash, &scid, scid_index, sender_secret);
-        let txid = tx.get_hash(3);
+        let bpp = tx.payloads[t].statement.bpp();
+        let txid = tx.get_hash(bpp);
         let proof = generate_proof(
             &scid,
             scid_index,
@@ -295,7 +308,8 @@ pub fn decode_balance(ebal: &ElGamal, secret: &Fr) -> Result<u64, String> {
 /// Verify a built tx's proofs (the reference self-verifies before returning).
 pub fn self_verify(tx: &Transaction) -> bool {
     let mut scid_map: std::collections::HashMap<[u8; 32], i32> = std::collections::HashMap::new();
-    let txid = tx.get_hash(3);
+    let bpp = tx.payloads[0].statement.bpp();
+    let txid = tx.get_hash(bpp);
     for p in &tx.payloads {
         let scid_index = scid_map.get(&p.scid).copied().unwrap_or(0);
         if let Some(proof) = &p.proof {
