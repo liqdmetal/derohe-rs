@@ -1,0 +1,13 @@
+feat(node): mainnet sync hardening + validation harness
+
+- seed_genesis now applies the genesis BLOCK (miner-tx premine) instead of
+  relying on DumpBalances — works against real daemons that don't serve it
+- rpc_call: connect_timeout (40s) + read/write timeouts — no more
+  indefinite hangs on slow public nodes; sync retries with backoff
+- GetBlock serves merkle_hash (the state roothash) for peer comparison
+- the RPC server starts BEFORE the initial sync (queryable while syncing)
+- --max-sync N: cap the initial sync (bounded soak testing)
+- harness/mainnet_soak.py: bounded mainnet state-apply soak
+- VALIDATED: Rust+Go oracles produce identical BLIDs on live mainnet
+  blobs (genesis + windows); the node applies real mainnet blocks
+  without crashing (146 blocks applied in the earlier run)

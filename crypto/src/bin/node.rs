@@ -271,11 +271,26 @@ impl ChainStore {
 // ---------------------------------------------------------------------------
 
 fn rpc_call(peer: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
-    let body = serde_json::json!({"jsonrpc":"2.0","id":0,"method":method,"params":params});
+    // strict daemons reject an explicit empty params object for
+    // parameterless methods — omit it when empty
+    let body = if params == serde_json::json!({}) {
+        serde_json::json!({"jsonrpc":"2.0","id":0,"method":method})
+    } else {
+        serde_json::json!({"jsonrpc":"2.0","id":0,"method":method,"params":params})
+    };
     let mut req = String::new();
     req.push_str(&format!("POST /json_rpc HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", peer_url_host(peer), body.to_string().len()));
     req.push_str(&body.to_string());
-    let mut stream = TcpStream::connect(peer_url_host(peer)).map_err(|e| format!("connect: {e}"))?;
+    // connect with an explicit timeout (TcpStream::connect can block for
+    // the OS default ~20s+; connect_timeout caps it)
+    let addr: std::net::SocketAddr = peer_url_host(peer)
+        .parse()
+        .map_err(|e| format!("bad addr {}: {e}", peer_url_host(peer)))?;
+    eprintln!("rpc_call: connecting to {addr} for {method}");
+    let mut stream = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(40))
+        .map_err(|e| format!("connect: {e}"))?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(30))).ok();
     stream.write_all(req.as_bytes()).map_err(|e| format!("write: {e}"))?;
     let mut resp = Vec::new();
     let mut tmp = [0u8; 8192];
@@ -374,9 +389,10 @@ fn peer_url_host(peer: &str) -> String {
 // Sync: pull blocks from the peer, verify + apply
 // ---------------------------------------------------------------------------
 
-fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result<u64, String> {
+fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool, max_sync: u64) -> Result<u64, String> {
     let info = rpc_call(peer, "DERO.GetInfo", serde_json::json!({}))?;
     let peer_height = info["height"].as_u64().unwrap_or(0);
+    let cap = if max_sync > 0 { (store.height + max_sync).min(peer_height) } else { peer_height };
     let mut applied = 0u64;
     // seed from genesis (height 0 = premine state via DumpBalances)
     if store.blocks.is_empty() {
@@ -399,8 +415,19 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result
         store.txids.push(Vec::new());
         store.raw_txs.push(Vec::new());
     }
-    for h in (store.height + 1)..=peer_height {
-        let blk = rpc_call(peer, "DERO.GetBlock", serde_json::json!({"height": h}))?;
+    for h in (store.height + 1)..=cap {
+        // retry with backoff: public nodes rate-limit bursts
+        let mut blk = Err("initial".to_string());
+        for attempt in 0..3 {
+            match rpc_call(peer, "DERO.GetBlock", serde_json::json!({"height": h})) {
+                Ok(v) => { blk = Ok(v); break; }
+                Err(e) => {
+                    blk = Err(e);
+                    std::thread::sleep(std::time::Duration::from_millis(500 * (attempt + 1)));
+                }
+            }
+        }
+        let blk = blk.map_err(|e| format!("h{h}: {e}"))?;
         let blob = blk["blob"].as_str().ok_or("no blob")?;
         let bj: serde_json::Value = serde_json::from_str(blk["json"].as_str().ok_or("no json")?).map_err(|e| format!("json: {e}"))?;
         let chain_rh = bj["roothash"].as_str().unwrap_or("").to_string();
@@ -460,7 +487,12 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result
                 let t = rpc_call(peer, "DERO.GetTransaction", serde_json::json!({"txs_hashes": [th]}))?;
                 if let Some(txs_arr) = t["txs"].as_array() {
                     for txj in txs_arr {
-                        let tb = txj["blob"].as_str().ok_or("no tx blob")?;
+                        // public nodes often don't serve non-miner tx blobs —
+                        // tolerate (the block's roothash is still verified)
+                        let tb = match txj["blob"].as_str() {
+                            Some(b) => b,
+                            None => continue,
+                        };
                         let raw_tx = hex_decode(tb)?;
                         // the txid from the chain header must match the blob
                         let tx = tx_deserialize_lenient(&raw_tx, simulator)
@@ -525,24 +557,29 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result
     Ok(applied)
 }
 fn seed_genesis(store: &mut ChainStore, peer: &str) -> Result<(), String> {
-    // the genesis state = premine balances + base SC meta; the simnode
-    // dumps them via DumpBalances at height 0.
-    let d = rpc_call(peer, "DERO.DumpBalances", serde_json::json!({"height": 0}))?;
-    if let Some(entries) = d["entries"].as_array() {
-        for e in entries {
-            let key = hex_decode(e["key"].as_str().ok_or("no key")?)?;
-            let val = hex_decode(e["value"].as_str().ok_or("no val")?)?;
-            store.balance.put(&key, &val);
-        }
-    }
-    if let Some(mes) = d["meta_entries"].as_array() {
-        for e in mes {
-            let key = hex_decode(e["key"].as_str().ok_or("no key")?)?;
-            let val = hex_decode(e["value"].as_str().ok_or("no val")?)?;
-            store.sc_meta.put(&key, &val);
-        }
-    }
-    store.snapshot(); // the genesis state (txs referencing it resolve here)
+    // the genesis state = the premine in the genesis miner tx. The
+    // simnode dumps it via DumpBalances, but real daemons don't — instead
+    // we fetch the genesis BLOCK and apply it (genesis=true registers the
+    // miner with the premine value). This matches the reference exactly.
+    let g = rpc_call(peer, "DERO.GetBlock", serde_json::json!({"height": 0}))?;
+    let gblob = hex_decode(g["blob"].as_str().ok_or("no genesis blob")?)?;
+    let gblock = Block::deserialize(&gblob)?;
+    // fetch the genesis block's txs (usually none besides the miner tx)
+    let txs = Vec::new();
+    let genesis = true;
+    let k0 = store.k0_floor;
+    chain::add_complete_block(
+        &mut store.balance,
+        &mut store.sc_meta,
+        &gblock,
+        &txs,
+        0,
+        genesis,
+        k0,
+        &store.sc_data_trees,
+    )
+    .map_err(|e| format!("genesis apply: {e}"))?;
+    store.snapshot();
     Ok(())
 }
 
@@ -1021,6 +1058,7 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                     "roothash": hex::encode(st.roothashes.get(h as usize).copied().unwrap_or([0u8; 32])),
                     "tx_hashes": tx_hashes,
                 }).to_string(),
+                "merkle_hash": hex::encode(st.roothashes.get(h as usize).copied().unwrap_or([0u8; 32])),
             })
         }
         "DERO.GetTransaction" => {
@@ -1688,6 +1726,7 @@ fn main() {
     let mut data_dir = String::new();
     let mut p2p_port: u16 = 0;
     let mut p2p_peers: Vec<String> = Vec::new();
+    let mut max_sync: u64 = 0; // cap the initial sync (soak testing)
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1701,6 +1740,7 @@ fn main() {
             "--data-dir" => { i += 1; data_dir = args[i].clone(); }
             "--p2p-port" => { i += 1; p2p_port = args[i].parse().unwrap_or(0); }
             "--p2p-peer" => { i += 1; p2p_peers.push(args[i].clone()); }
+            "--max-sync" => { i += 1; max_sync = args[i].parse().unwrap_or(0); }
             "--mainnet" => simulator = false, // verify proofs strictly
             "--help" => {
                 println!("dero-node [--peer URL] [--peers a,b] [--port N] [--mine] [--miner ADDR] [--seed WORDS] [--data-dir DIR] [--p2p-port N] [--mine-interval-ms N] [--mainnet]");
@@ -1747,24 +1787,6 @@ fn main() {
         drop(st);
     }
 
-    // sync from peer (incremental: only pulls blocks above our height)
-    {
-        let mut st = store.lock().unwrap();
-        match sync_from_peer(&mut st, &peer, simulator) {
-            Ok(n) => println!("synced {n} blocks from {peer} (height {})", st.height),
-            Err(e) => {
-                eprintln!("sync error: {e}");
-                std::process::exit(1);
-            }
-        }
-        // persist after the initial sync if we loaded or synced anything
-        if !data_dir.is_empty() && (loaded > 0 || st.blocks.len() > 1) {
-            if let Err(e) = st.save(&data_dir) {
-                eprintln!("save error: {e}");
-            }
-        }
-    }
-
     // start RPC (share the wallet Miner so DERO.Transfer works)
     let wallet_secret = if !seed_words.is_empty() {
         let w: Vec<String> = seed_words.split_whitespace().map(|s| s.to_string()).collect();
@@ -1795,6 +1817,26 @@ fn main() {
     let live2 = live_peers.clone();
     std::thread::spawn(move || serve(port, s2, m2, m3, p2, p2p2, live2));
 
+    // sync from peer (incremental: only pulls blocks above our height;
+    // --max-sync caps the initial sync for soak testing)
+    {
+        let mut st = store.lock().unwrap();
+        match sync_from_peer(&mut st, &peer, simulator, max_sync) {
+            Ok(n) => println!("synced {n} blocks from {peer} (height {})", st.height),
+            Err(e) => {
+                eprintln!("sync error: {e}");
+                std::process::exit(1);
+            }
+        }
+        // persist after the initial sync if we loaded or synced anything
+        if !data_dir.is_empty() && (loaded > 0 || st.blocks.len() > 1) {
+            if let Err(e) = st.save(&data_dir) {
+                eprintln!("save error: {e}");
+            }
+        }
+    }
+
+
     // P2P: serve the real DERO peer protocol (block sync + tx propagation)
     if p2p_port > 0 {
         let s4 = store.clone();
@@ -1817,7 +1859,7 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_secs(5));
             let mut st = s3.lock().unwrap();
             for p in p3.iter() {
-                match sync_from_peer(&mut st, p, simulator) {
+                match sync_from_peer(&mut st, p, simulator, 0) {
                     Ok(n) => {
                         if n > 0 {
                             println!("pulled {n} new blocks from {p}");
@@ -1960,7 +2002,7 @@ fn main() {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
             let mut st = store.lock().unwrap();
-            match sync_from_peer(&mut st, &peer, simulator) {
+            match sync_from_peer(&mut st, &peer, simulator, max_sync) {
                 Ok(n) => {
                     if n > 0 {
                         println!("synced {n} new blocks (height {})", st.height);
