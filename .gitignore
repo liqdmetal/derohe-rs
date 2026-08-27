@@ -20,5 +20,6 @@ bin/*.exe
 target/
 # node test data dirs
 nodetest-data/
+nodetest-data2/
 node-data/
 *.jsonl
