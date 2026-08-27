@@ -398,6 +398,139 @@ pub fn blake2s_256(data: &[u8]) -> Vec<u8> {
     dero_crypto::statement::graviton_sum(data).to_vec()
 }
 
+/// Decode an encrypted balance (66-byte ElGamal) with the wallet secret
+/// (32-byte scalar, little-endian). Returns the atomic balance as u64.
+#[wasm_bindgen]
+pub fn decode_balance(ebalance_hex: &str, secret_bytes: &[u8]) -> Result<u64, JsValue> {
+    let raw = match hex::decode(ebalance_hex) {
+        Ok(r) => r,
+        Err(e) => return Err(JsValue::from_str(&format!("bad balance hex: {e}"))),
+    };
+    let ebal = match dero_crypto::elgamal::ElGamal::deserialize(&raw) {
+        Ok(e) => e,
+        Err(e) => return Err(JsValue::from_str(&format!("bad elgamal: {e}"))),
+    };
+    let secret = ark_bn254::Fr::from_le_bytes_mod_order(secret_bytes);
+    dero_crypto::wallet::decode_balance(&ebal, &secret, 44)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Build a NORMAL transfer tx (ring + balances from the caller) and return
+/// the serialized blob + txid as a JSON string. Pure — no network.
+#[wasm_bindgen]
+pub fn build_transfer(
+    words: &str,
+    dest_addr: &str,
+    amount: u64,
+    ring_hex: &str,       // comma-separated 33-byte compressed keys
+    balances_hex: &str,   // comma-separated 66-byte ElGamal hex
+    self_balance: u64,
+    roothash_hex: &str,
+    blid_hex: &str,
+    height: u64,
+) -> Result<String, JsValue> {
+    use dero_crypto::tx_builder::{build_transaction, RingMember, Transfer};
+    let w: Vec<String> = words.split_whitespace().map(|s| s.to_string()).collect();
+    let seed = dero_crypto::mnemonics::words_to_key(&w)
+        .map_err(|e| JsValue::from_str(&e))?;
+    let mut le = [0u8; 32];
+    for i in 0..32 {
+        le[i] = seed[31 - i];
+    }
+    let secret = ark_bn254::Fr::from_le_bytes_mod_order(&le);
+    let sender = dero_crypto::hash_to_point::base_g().mul_bigint(secret.into_bigint());
+    let self_comp = dero_crypto::curve::encode_compressed(&sender);
+
+    // ring: [self, dest, others]
+    let ring_keys: Vec<Vec<u8>> = ring_hex
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| hex::decode(s).unwrap_or_default())
+        .collect();
+    let ring_bals: Vec<Vec<u8>> = balances_hex
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| hex::decode(s).unwrap_or_default())
+        .collect();
+    let mut ring: Vec<RingMember> = Vec::new();
+    for (i, k) in ring_keys.iter().enumerate() {
+        let mut kk = [0u8; 33];
+        if k.len() == 33 {
+            kk.copy_from_slice(k);
+        }
+        let bal = if i < ring_bals.len() {
+            dero_crypto::elgamal::ElGamal::deserialize(&ring_bals[i])
+                .map_err(|e| JsValue::from_str(&e))?
+        } else {
+            let pk = dero_crypto::curve::decode_compressed(&kk).unwrap_or_default();
+            dero_crypto::elgamal::ElGamal::new(pk, dero_crypto::hash_to_point::base_g())
+        };
+        ring.push(RingMember { public_key: kk, balance: bal, balance_decoded: if i == 0 { self_balance } else { 0 } });
+    }
+    let dest_comp = dero_crypto::rpc_addr::address_to_compressed(dest_addr)
+        .map_err(|e| JsValue::from_str(&e))?;
+    let mut blid = [0u8; 32];
+    if let Ok(b) = hex::decode(blid_hex) {
+        if b.len() == 32 {
+            blid.copy_from_slice(&b);
+        }
+    }
+    let mut rh = [0u8; 32];
+    if let Ok(b) = hex::decode(roothash_hex) {
+        if b.len() == 32 {
+            rh.copy_from_slice(&b);
+        }
+    }
+    let transfers = vec![Transfer {
+        destination: dest_addr.to_string(),
+        amount,
+        burn: 0,
+        scid: [0u8; 32],
+        payload_rpc: Vec::new(),
+    }];
+    let tx = build_transaction(
+        &transfers,
+        &[ring],
+        0,
+        1,
+        &blid,
+        height,
+        &dero_crypto::rpc_args::Arguments::default(),
+        &rh,
+        9,
+        0,
+        &secret,
+        &[0x5au8; 16384],
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+    let blob = tx.serialize(2);
+    let txid = tx.get_hash(2);
+    let json = serde_json::json!({
+        "blob": hex::encode(&blob),
+        "txid": hex::encode(txid),
+        "dest": dest_addr,
+        "amount": amount,
+    });
+    Ok(json.to_string())
+}
+
+/// Encrypt the wallet seed with a password (XChaCha20-Poly1305, nonce
+/// appended). Returns hex.
+#[wasm_bindgen]
+pub fn wallet_encrypt(password: &[u8], data: &[u8]) -> Result<String, JsValue> {
+    dero_crypto::wallet_cipher::encrypt_with_password(password, data)
+        .map(|v| hex::encode(&v))
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Decrypt a wallet seed encrypted by `wallet_encrypt`. Returns the bytes.
+#[wasm_bindgen]
+pub fn wallet_decrypt(password: &[u8], data_hex: &str) -> Result<Vec<u8>, JsValue> {
+    let raw = hex::decode(data_hex).map_err(|e| JsValue::from_str(&format!("bad hex: {e}")))?;
+    dero_crypto::wallet_cipher::decrypt_with_password(password, &raw)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
 // ---------------------------------------------------------------------------
 // Panic hook (optional — call init_panic_hook() at startup for console errors)
 // ---------------------------------------------------------------------------

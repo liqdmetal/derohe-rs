@@ -1,6 +1,10 @@
-feat(node): mempool persistence — txs survive restarts
+feat(wallet): at-rest encryption + wasm light-client wallet ops
 
-- the keep-synced loop persists the mempool to --data-dir every 5s
-- PROVEN: send tx -> saved (mempool.jsonl 1 line) -> kill node before
-  mining -> restart -> "mempool loaded: 1 txs" — the tx survived the
-  crash and is back in the pool
+- crypto/src/wallet_cipher.rs: XChaCha20-Poly1305 AEAD wallet encryption
+  (clean-room port of walletapi/cipher.go — password-derived key, 12-byte
+  nonce appended). Roundtrip + wrong-password rejection tested (69 total)
+- wasm-light-client: NEW decode_balance (BSGS balance decode),
+  build_transfer (construct a NORMAL tx in the browser — pure, no
+  network), wallet_encrypt/wallet_decrypt (at-rest seed protection).
+  Compiles for wasm32-unknown-unknown
+- wallet-ffi: still checks clean

@@ -30,6 +30,7 @@ pub mod polynomial;
 pub mod rpc_args;
 pub mod statement;
 pub mod wallet;
+pub mod wallet_cipher;
 pub mod wallet_state;
 pub mod transaction;
 pub mod tx_builder;

@@ -21,5 +21,6 @@ target/
 # node test data dirs
 nodetest-data/
 nodetest-data2/
+nodetest-mp/
 node-data/
 *.jsonl

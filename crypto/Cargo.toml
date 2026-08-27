@@ -24,6 +24,8 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }
 crc32fast = "1"
 lazy_static = "1"
 chacha20 = "0.9"
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
 
 [[bin]]
 name = "dero-oracle"
