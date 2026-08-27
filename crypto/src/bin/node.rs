@@ -1810,6 +1810,8 @@ fn main() {
     let p3 = peers_arc.clone();
     let p2p_peers_arc = Arc::new(p2p_peers.clone());
     let p4 = p2p_peers_arc.clone();
+    let data_dir_loop = data_dir.clone();
+    let m_loop = mempool.clone();
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
@@ -1835,6 +1837,14 @@ fn main() {
                     }
                     Err(e) => eprintln!("p2p sync {p}: {e}"),
                 }
+            }
+            // persist the mempool periodically (survives crashes between mines)
+            if !data_dir_loop.is_empty() {
+                let mp = m_loop.lock().unwrap();
+                if let Err(e) = st.save_mempool(&data_dir_loop, &mp) {
+                    eprintln!("save mempool error: {e}");
+                }
+                drop(mp);
             }
         }
     });
