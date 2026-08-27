@@ -557,14 +557,37 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool, max_sync:
     Ok(applied)
 }
 fn seed_genesis(store: &mut ChainStore, peer: &str) -> Result<(), String> {
-    // the genesis state = the premine in the genesis miner tx. The
-    // simnode dumps it via DumpBalances, but real daemons don't — instead
-    // we fetch the genesis BLOCK and apply it (genesis=true registers the
-    // miner with the premine value). This matches the reference exactly.
+    // try DumpBalances first (the simnode serves it; it carries the exact
+    // premine distribution incl. testnet dummy accounts)
+    match rpc_call(peer, "DERO.DumpBalances", serde_json::json!({"height": 0})) {
+        Ok(d) => {
+            if let Some(entries) = d["entries"].as_array() {
+                if !entries.is_empty() {
+                    for e in entries {
+                        let key = hex_decode(e["key"].as_str().ok_or("no key")?)?;
+                        let val = hex_decode(e["value"].as_str().ok_or("no val")?)?;
+                        store.balance.put(&key, &val);
+                    }
+                }
+            }
+            if let Some(mes) = d["meta_entries"].as_array() {
+                for e in mes {
+                    let key = hex_decode(e["key"].as_str().ok_or("no key")?)?;
+                    let val = hex_decode(e["value"].as_str().ok_or("no val")?)?;
+                    store.sc_meta.put(&key, &val);
+                }
+            }
+            store.snapshot();
+            return Ok(());
+        }
+        Err(_) => {
+            // real daemons don't serve DumpBalances — fall back to the
+            // genesis block's miner-tx premine
+        }
+    }
     let g = rpc_call(peer, "DERO.GetBlock", serde_json::json!({"height": 0}))?;
     let gblob = hex_decode(g["blob"].as_str().ok_or("no genesis blob")?)?;
     let gblock = Block::deserialize(&gblob)?;
-    // fetch the genesis block's txs (usually none besides the miner tx)
     let txs = Vec::new();
     let genesis = true;
     let k0 = store.k0_floor;
@@ -1380,7 +1403,13 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Me
                             blist.push(store_g.blocks[0].0.get_hash().to_vec());
                         }
                         let mut body = cbor::map(3);
-                        body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+                        let mut common = cbor::map(5);
+        common.extend_from_slice(&cbor::kv("HEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("THEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("SHEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("STATE", &cbor::bytes(&[0u8; 32])));
+        common.extend_from_slice(&cbor::kv("HF", &cbor::uint(0)));
+        body.extend_from_slice(&cbor::kv("COMMON", &common));
                         body.extend_from_slice(&cbor::kv(
                             "SH",
                             &cbor::int(start as i64),
@@ -1410,7 +1439,13 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Me
                             }
                         }
                         let mut body = cbor::map(2);
-                        body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+                        let mut common = cbor::map(5);
+        common.extend_from_slice(&cbor::kv("HEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("THEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("SHEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("STATE", &cbor::bytes(&[0u8; 32])));
+        common.extend_from_slice(&cbor::kv("HF", &cbor::uint(0)));
+        body.extend_from_slice(&cbor::kv("COMMON", &common));
                         let mut cb = cbor::array(blobs.len());
                         for b in &blobs {
                             cb.extend_from_slice(&cbor::bytes(b));
@@ -1462,14 +1497,26 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Me
                             }
                         }
                         let mut body = cbor::map(2);
-                        body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+                        let mut common = cbor::map(5);
+        common.extend_from_slice(&cbor::kv("HEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("THEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("SHEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("STATE", &cbor::bytes(&[0u8; 32])));
+        common.extend_from_slice(&cbor::kv("HF", &cbor::uint(0)));
+        body.extend_from_slice(&cbor::kv("COMMON", &common));
                         body.extend_from_slice(&cbor::kv("RECEIVED", &cbor::int(count as i64)));
                         body
                     }
                     _ => {
                         // unknown method: error response
                         let mut body = cbor::map(1);
-                        body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+                        let mut common = cbor::map(5);
+        common.extend_from_slice(&cbor::kv("HEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("THEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("SHEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("STATE", &cbor::bytes(&[0u8; 32])));
+        common.extend_from_slice(&cbor::kv("HF", &cbor::uint(0)));
+        body.extend_from_slice(&cbor::kv("COMMON", &common));
                         body
                     }
                 };
@@ -1498,9 +1545,18 @@ fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool, local_lp: 
     // read the handshake response (header + object)
     let _hdr = read_frame(&mut s).map_err(|e| format!("p2p read hdr: {e}"))?;
     let _resp = read_frame(&mut s).map_err(|e| format!("p2p read: {e}"))?;
-    // Peer.Chain request: TWO frames — header {M,S} then object
+    // Peer.Chain request: TWO frames — header {M,S,E} then object.
+    // The COMMON struct carries the full Common_Struct (the reference's
+    // fxamacker marshals ALL fields — even zero-valued).
     let mut body = cbor::map(3);
-    body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+    let mut common = cbor::map(5);
+    common.extend_from_slice(&cbor::kv("HEIGHT", &cbor::int(0)));
+    common.extend_from_slice(&cbor::kv("THEIGHT", &cbor::int(0)));
+    common.extend_from_slice(&cbor::kv("SHEIGHT", &cbor::int(0)));
+    let mut state = cbor::bytes(&[0u8; 32]);
+    common.extend_from_slice(&cbor::kv("STATE", &state));
+    common.extend_from_slice(&cbor::kv("HF", &cbor::uint(0)));
+    body.extend_from_slice(&cbor::kv("COMMON", &common));
     body.extend_from_slice(&cbor::kv("BLIST", &cbor::array(0)));
     body.extend_from_slice(&cbor::kv("TOPO", &cbor::array(0)));
     write_frame(&mut s, &cbor::header("Peer.Chain", 1, "")).map_err(|e| format!("p2p write: {e}"))?;
@@ -1534,7 +1590,13 @@ fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool, local_lp: 
             continue;
         }
         let mut body = cbor::map(2);
-        body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+        let mut common = cbor::map(5);
+        common.extend_from_slice(&cbor::kv("HEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("THEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("SHEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("STATE", &cbor::bytes(&[0u8; 32])));
+        common.extend_from_slice(&cbor::kv("HF", &cbor::uint(0)));
+        body.extend_from_slice(&cbor::kv("COMMON", &common));
         let mut bl = cbor::array(1);
         bl.extend_from_slice(&cbor::bytes(hb));
         body.extend_from_slice(&cbor::kv("BLIST", &bl));
@@ -1606,7 +1668,13 @@ fn p2p_broadcast_tx(addr: &str, blob_hex: &str) -> Result<(), String> {
     let mut s = TcpStream::connect(addr).map_err(|e| format!("p2p connect {addr}: {e}"))?;
     s.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
     let mut body = cbor::map(2);
-    body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+    let mut common = cbor::map(5);
+        common.extend_from_slice(&cbor::kv("HEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("THEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("SHEIGHT", &cbor::int(0)));
+        common.extend_from_slice(&cbor::kv("STATE", &cbor::bytes(&[0u8; 32])));
+        common.extend_from_slice(&cbor::kv("HF", &cbor::uint(0)));
+        body.extend_from_slice(&cbor::kv("COMMON", &common));
     let mut txlist = cbor::array(1);
     txlist.extend_from_slice(&cbor::bytes(&hex_decode(blob_hex)?));
     body.extend_from_slice(&cbor::kv("TXLIST", &txlist));

@@ -128,14 +128,14 @@ pub mod cbor {
     /// header map then the payload object as separate CBOR items — the
     /// reference's WriteRequest writes TWO frames: header then object).
     pub fn header(method: &str, seq: u64, err: &str) -> Vec<u8> {
+        // the reference ALWAYS emits the E field (even empty) — fxamacker
+        // marshals the struct with all fields
         let mut out = map(3);
         if !method.is_empty() {
             out.extend_from_slice(&kv("M", &text(method)));
         }
         out.extend_from_slice(&kv("S", &uint(seq)));
-        if !err.is_empty() {
-            out.extend_from_slice(&kv("E", &text(err)));
-        }
+        out.extend_from_slice(&kv("E", &text(err)));
         out
     }
 
