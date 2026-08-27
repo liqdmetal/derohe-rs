@@ -28,16 +28,48 @@ fn main() {
     let words = &args[1];
     let sc_install = args.len() >= 5 && args[2] == "--sc-install";
     let sc_call = args.len() >= 6 && args[2] == "--sc-call";
-    let dest = if sc_install || sc_call { String::new() } else { args[2].clone() };
-    let amount: u64 = if sc_install || sc_call { 0 } else { args[3].parse().expect("amount") };
-    // --sc-call <scid> <entrypoint> <daemon>: args[3]=scid, [4]=entrypoint, [5]=daemon
+    let burn = args.len() >= 5 && args[2] == "--burn";
+    let dest = if sc_install || sc_call { String::new() } else if burn { args[3].clone() } else { args[2].clone() };
+    let amount: u64 = if sc_install || sc_call { 0 } else if burn { args[4].parse().expect("amount") } else { args[3].parse().expect("amount") };
+    // --sc-call <scid> <entrypoint> [--arg k=v ...] <daemon>
     let (sc_scid, sc_entrypoint) = if sc_call {
         (args[3].clone(), args[4].clone())
     } else {
         (String::new(), String::new())
     };
-    let daemon = if sc_call { args[5].clone() } else { args[4].clone() };
     let sc_code = if sc_install { args[3].clone() } else { String::new() };
+    // SC-call extra args: --arg <name>=<value> pairs (Uint64 values).
+    // The daemon is the LAST arg.
+    let mut sc_args: Vec<(String, u64)> = Vec::new();
+    let mut daemon = if sc_call {
+        args[5].clone()
+    } else if burn {
+        args[5].clone()
+    } else {
+        args[4].clone()
+    };
+    if sc_call {
+        let mut i = 5;
+        while i + 1 < args.len() && args[i] == "--arg" {
+            if let Some((k, v)) = args[i + 1].split_once('=') {
+                if let Ok(vu) = v.parse() {
+                    sc_args.push((k.to_string(), vu));
+                }
+            }
+            i += 2;
+            // the last arg (daemon) is not an --arg pair
+            if i + 1 >= args.len() && !args[i].starts_with("--") {
+                break;
+            }
+        }
+        // daemon = the last positional arg after any --arg pairs
+        for a in args.iter().rev() {
+            if !a.starts_with("--") && !a.contains('=') {
+                daemon = a.clone();
+                break;
+            }
+        }
+    }
 
     // 1. derive the wallet keys
     let seed = words_to_key(&words.split_whitespace().map(|w| w.to_string()).collect::<Vec<_>>())
@@ -203,12 +235,13 @@ fn main() {
     let transfers = vec![Transfer {
         destination: dest.clone(),
         amount,
-        burn: 0,
+        burn: if burn { amount } else { 0 }, // TX_BURN: the amount IS burned
         scid: [0u8; 32],
         payload_rpc: Vec::new(),
     }];
     // SC install: SC_ACTION = 1 (SC_INSTALL), SC_CODE = the source.
     // SC call:   SC_ACTION = 0 (SC_CALL), SC_ID (hash) + entrypoint (string)
+    //            + optional --arg k=v (Uint64) arguments
     let scdata = if sc_install {
         Arguments(vec![
             Argument { name: SC_ACTION.to_string(), data_type: DATA_UINT64, value: ArgValue::U64(1) },
@@ -223,14 +256,22 @@ fn main() {
             std::process::exit(1);
         }
         scid32.copy_from_slice(&scid_bytes);
-        Arguments(vec![
+        let mut args = vec![
             Argument { name: SC_ACTION.to_string(), data_type: DATA_UINT64, value: ArgValue::U64(0) },
             Argument { name: "SC_ID".to_string(), data_type: DATA_HASH, value: ArgValue::Hash(scid32) },
             Argument { name: "entrypoint".to_string(), data_type: DATA_STRING, value: ArgValue::Str(sc_entrypoint.clone()) },
-        ])
+        ];
+        // user-supplied SC arguments (the contract's parameters)
+        for (k, v) in &sc_args {
+            args.push(Argument { name: k.clone(), data_type: DATA_UINT64, value: ArgValue::U64(*v) });
+        }
+        Arguments(args)
     } else {
         Arguments::default()
     };
+    if burn {
+        println!("BURN tx: {amount} atomic to {dest}");
+    }
     let tx = build_transaction(
         &transfers,
         &[ring],

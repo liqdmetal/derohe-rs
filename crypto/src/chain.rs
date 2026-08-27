@@ -300,6 +300,7 @@ pub fn process_transaction_sc(
         .unwrap_or(3);
     let txid = tx.get_hash(bpp);
     let scid = txid; // install: scid = txid
+    let mut call_scid: Option<[u8; 32]> = None; // SC_CALL: the SC_ID
     let incoming_value: std::collections::HashMap<[u8; 32], u64> = tx
         .payloads
         .iter()
@@ -393,6 +394,9 @@ pub fn process_transaction_sc(
         0 => {
             // SC_CALL (Go rpc.SC_CALL = 0)
             let scid = tx.scdata.get_hash("SC_ID").unwrap_or([0u8; 32]);
+            // the SC_ID is the data-tree key for the call (the outer `scid`
+            // is the txid for installs) — capture it for the cache flush
+            call_scid = Some(scid);
             let entry = tx.scdata.get_string("entrypoint").ok_or("no entrypoint provided")?;
             entrypoint = entry;
             // must be installed
@@ -402,11 +406,14 @@ pub fn process_transaction_sc(
             w_sc_data_tree = wrapped_tree(cache, ss, &scid);
             let (balance, sc_parsed) = read_sc(&mut w_sc_data_tree, &scid);
             let sc_parsed = sc_parsed.ok_or("SC not found")?;
+            // pass the tx's SCDATA (marshalled) so the entrypoint receives
+            // its parameters (e.g. SetVal(x Uint64) gets x from here)
+            let scdata_bytes = tx.scdata.marshal_binary().unwrap_or_default();
             execute_sc_function(
                 &mut w_sc_tree, &mut w_sc_data_tree, &scid,
                 bl_height, bl_topoheight, bl_timestamp, blid, &txid,
                 &sc_parsed, &entrypoint, balance, &signer, &incoming_value,
-                &[], fees,
+                &scdata_bytes, fees,
             )?;
         }
         _ => return Err("unknown action".into()),
@@ -415,6 +422,12 @@ pub fn process_transaction_sc(
     // sanity check + commit
     sanity_check_external_transfers(&mut w_sc_data_tree, balance_tree, &scid)?;
     process_external(cache, ss, balance_tree, &scid, &mut w_sc_data_tree, &mut w_sc_tree);
+    // CRITICAL: w_sc_data_tree wraps a CLONE of the cache's tree — its
+    // STORE writes must be flushed BACK into the cache so the caller sees
+    // the final SC data (the Go wrapper mutates the cache's tree in place).
+    // Keyed by the SC's id (the SC_ID for calls, the txid for installs).
+    let flush_scid = call_scid.unwrap_or(scid);
+    cache.insert(flush_scid, w_sc_data_tree.tree.clone());
     // flush the cloned meta tree's SC-meta entry back into the caller's
     // sc_meta so the caller's tree reflects the SC meta (incl. the K0 B2
     // NoSigner bit), matching Go where the wrapper wraps the caller's tree
@@ -448,6 +461,9 @@ pub fn add_complete_block(
     height: u64,
     genesis: bool,
     k0_floor: Option<u64>,
+    // accumulated SC data trees from prior blocks — the snapshot source so
+    // SC calls can see contracts installed in earlier blocks
+    prior_sc_data: &std::collections::HashMap<[u8; 32], Tree>,
 ) -> Result<(u64, [u8; 32], [u8; 32], std::collections::HashMap<[u8; 32], Tree>), String> {
     // ensure the miner is registered (zero balance) so the reward add works
     if !genesis && balance_tree.get(&bl.miner_tx.miner_address.to_vec()).is_none() {
@@ -458,20 +474,28 @@ pub fn add_complete_block(
         }
     }
     let mut fees = 0u64;
-    let mut sc_data: std::collections::HashMap<[u8; 32], Tree> = std::collections::HashMap::new();
+    let mut sc_data: std::collections::HashMap<[u8; 32], Tree> = prior_sc_data.clone();
+    // the snapshot must contain the PRIOR blocks' SC data trees so SC calls
+    // can read variables installed earlier
+    let mut ss = crate::sc::Snapshot { trees: std::collections::HashMap::new() };
+    for (scid, tree) in &sc_data {
+        ss.trees.insert(String::from_utf8_lossy(scid).to_string(), tree.clone());
+    }
     for tx in txs {
         fees += process_transaction(&mut std::collections::HashMap::new(), tx, balance_tree, height, true);
         if tx.tx_type == TX_SC {
             let mut cache = std::collections::HashMap::new();
-            let mut ss = crate::sc::Snapshot { trees: std::collections::HashMap::new() };
             let blid = bl.get_hash();
             let _ = process_transaction_sc(
                 &mut cache, &mut ss, balance_tree, sc_meta, height, height, 0,
                 &blid, tx, k0_floor,
-            );
+            ).map_err(|e| eprintln!("SC apply error: {e}"));
             // capture the SC data trees (per-SCID: code + variables) so the
             // node can serve DERO.GetSC
             for (scid, tree) in cache {
+                if std::env::var("SC_DEBUG").is_ok() {
+                    eprintln!("block: SC cache[{:?}] {} keys", &scid[..4], crate::graviton::tree_keys(&tree).len());
+                }
                 sc_data.insert(scid, tree);
             }
         }

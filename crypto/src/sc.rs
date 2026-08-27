@@ -116,9 +116,44 @@ pub fn execute_sc_function(
         store_sc_value(data_tree, scid, asset, &newv.to_be_bytes());
     }
 
-    let params: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    // build params from the function's declared Params + the tx SCDATA
+    // (the reference: for each function param, look it up in SCDATA by
+    // name+type; "value" = the incoming asset value)
+    let scdata = crate::rpc_args::Arguments::unmarshal_binary(scdata_bytes).unwrap_or_default();
+    let params: std::collections::HashMap<String, String> = {
+        let mut p = std::collections::HashMap::new();
+        if let Some(f) = sc_parsed.functions.get(entrypoint) {
+            for fp in &f.params {
+                let zerohash = [0u8; 32];
+                match (&fp.vtype, fp.name.as_str()) {
+                    (crate::dvm::Vtype::Uint64, "value") => {
+                        p.insert(fp.name.clone(), format!("{}", incoming_value.get(&zerohash).copied().unwrap_or(0)));
+                    }
+                    (crate::dvm::Vtype::Uint64, _) => {
+                        if let Some(v) = scdata.get_uint64(&fp.name) {
+                            p.insert(fp.name.clone(), format!("{v}"));
+                        } else {
+                            return Err(format!("entrypoint '{entrypoint}' parameter '{}' missing or not yet supported", fp.name));
+                        }
+                    }
+                    (crate::dvm::Vtype::String, _) => {
+                        if let Some(v) = scdata.get_string(&fp.name) {
+                            p.insert(fp.name.clone(), v);
+                        } else {
+                            return Err(format!("entrypoint '{entrypoint}' parameter '{}' missing or not yet supported", fp.name));
+                        }
+                    }
+                    _ => return Err(format!("entrypoint '{entrypoint}' parameter type not yet supported")),
+                }
+            }
+        }
+        p
+    };
 
     let mut state = dvm::SharedState::new(scid, blid, txid, signer, bl_height, bl_topoheight, bl_timestamp);
+    if std::env::var("SC_DEBUG").is_ok() {
+        eprintln!("execute_sc_function: entrypoint={entrypoint} params={params:?}");
+    }
     let result = run_smart_contract_internal(sc_parsed, entrypoint, &mut state, &params)?;
 
     // confirm: result must be Uint64 0

@@ -134,6 +134,43 @@ impl ChainStore {
         Ok(())
     }
 
+    /// Persist the mempool (raw tx blobs) to `dir`.
+    fn save_mempool(&self, dir: &str, mp: &Mempool) -> Result<(), String> {
+        use std::io::Write;
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;
+        let mut f = std::fs::File::create(format!("{dir}/mempool.jsonl"))
+            .map_err(|e| format!("open mempool: {e}"))?;
+        for raw in mp.raw.values() {
+            writeln!(f, "{}", serde_json::json!({"tx": hex::encode(raw)}))
+                .map_err(|e| format!("write: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Load the mempool from `dir` (raw tx blobs).
+    fn load_mempool(&mut self, dir: &str, mp: &mut Mempool) -> Result<(), String> {
+        use std::io::BufRead;
+        let path = format!("{dir}/mempool.jsonl");
+        if !std::path::Path::new(&path).exists() {
+            return Ok(());
+        }
+        let f = std::fs::File::open(&path).map_err(|e| format!("open mempool: {e}"))?;
+        for line in std::io::BufReader::new(f).lines() {
+            let line = line.map_err(|e| format!("read: {e}"))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&line).map_err(|e| format!("json: {e}"))?;
+            let raw = hex_decode(v["tx"].as_str().unwrap_or(""))?;
+            if let Ok(tx) = Transaction::deserialize(&raw, 2)
+                .or_else(|_| Transaction::deserialize(&raw, 3))
+            {
+                mp.add(tx, raw);
+            }
+        }
+        Ok(())
+    }
+
     /// Load chain state from `dir` (trees + blocks). Returns the number of
     /// blocks loaded, or 0 if nothing is there.
     fn load(&mut self, dir: &str) -> Result<u64, String> {
@@ -369,6 +406,42 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result
         let chain_rh = bj["roothash"].as_str().unwrap_or("").to_string();
         let raw = hex_decode(blob)?;
         let block = Block::deserialize(&raw)?;
+        // REORG: if the new block's tips don't include our current tip, the
+        // chains diverged — the reference pops + re-syncs. We re-sync from
+        // genesis (simpler, correct): reset the store and re-apply.
+        if h > 1 && !store.blocks.is_empty() {
+            let our_tip = store.blocks.last().map(|(b, _)| b.get_hash()).unwrap_or([0u8; 32]);
+            let agrees = block.tips.iter().any(|t| *t == our_tip);
+            if !agrees {
+                println!("reorg: tip mismatch at h{h} — resetting to genesis and re-syncing");
+                store.blocks.clear();
+                store.txids.clear();
+                store.raw_txs.clear();
+                store.roothashes.clear();
+                store.balance = Tree::new("BALANCE_TREE");
+                store.sc_meta = Tree::new("SC_META");
+                store.sc_data_trees.clear();
+                store.genesis_snapshot = None;
+                store.recent.clear();
+                store.height = 0;
+                seed_genesis(store, peer)?;
+                let pre_balance = store.balance.clone();
+                let pre_meta = store.sc_meta.clone();
+                let pre_b: Vec<(Vec<u8>, Vec<u8>)> = dero_crypto::graviton::tree_keys(&pre_balance)
+                    .iter().filter_map(|k| pre_balance.get(k).map(|v| (k.clone(), v))).collect();
+                let pre_m: Vec<(Vec<u8>, Vec<u8>)> = dero_crypto::graviton::tree_keys(&pre_meta)
+                    .iter().filter_map(|k| pre_meta.get(k).map(|v| (k.clone(), v))).collect();
+                store.genesis_snapshot = Some((pre_b, pre_m));
+                let g = rpc_call(peer, "DERO.GetBlock", serde_json::json!({"height": 0}))?;
+                let gblob = hex_decode(g["blob"].as_str().ok_or("no genesis blob")?)?;
+                let gblock = Block::deserialize(&gblob)?;
+                store.blocks.push((gblock, Vec::new()));
+                store.roothashes.push(store.roothash());
+                store.txids.push(Vec::new());
+                store.raw_txs.push(Vec::new());
+                store.snapshot();
+            }
+        }
         // fetch tx blobs (RAW — keep original bytes + chain txids so the
         // hash matches the block header even if a proof fails lenient parse)
         let mut txs = Vec::new();
@@ -425,7 +498,7 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result
         // apply state
         let (_, b_root, m_root, sc_data) = chain::add_complete_block(
             &mut store.balance, &mut store.sc_meta, &block, &txs, h,
-            h == 0, store.k0_floor,
+            h == 0, store.k0_floor, &store.sc_data_trees,
         ).map_err(|e| format!("h{h}: {e}"))?;
         for (scid, tree) in sc_data {
             store.sc_data_trees.insert(scid, tree);
@@ -853,7 +926,15 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 }
             };
             let mut mp = mempool.lock().unwrap();
-            if mp.add(tx, blob) {
+            if mp.add(tx, blob.clone()) {
+                // broadcast to P2P peers (the real wire protocol)
+                let blob_hex = hex::encode(&blob);
+                let lp = live_peers.lock().unwrap();
+                for pp in lp.iter() {
+                    if let Err(e) = p2p_broadcast_tx(pp, &blob_hex) {
+                        eprintln!("p2p broadcast {pp}: {e}");
+                    }
+                }
                 serde_json::json!({"txid": hex::encode(txid), "status": "OK"})
             } else {
                 return json_err_id(-32000, "tx already in pool", id);
@@ -1152,9 +1233,12 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 }
                 // also broadcast to live incoming P2P peers
                 let lp = live_peers.lock().unwrap();
+                println!("p2p: SubmitTX broadcast to {} live peers + {} configured", lp.len(), p2p_peers.len());
                 for pp in lp.iter() {
                     if let Err(e) = p2p_broadcast_tx(pp, &blob_hex) {
                         eprintln!("p2p broadcast {pp}: {e}");
+                    } else {
+                        println!("p2p: broadcast tx to {pp} OK");
                     }
                 }
                 serde_json::json!({"txid": hex::encode(txid), "status": "OK"})
@@ -1199,15 +1283,10 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Me
         let st = store.clone();
         let mp = mempool.clone();
         let lps_arc = live_peers.clone();
-        // record the incoming peer so we can broadcast txs to it
+        // NOTE: we do NOT register the raw source port here — it's
+        // ephemeral (closed after the sync). Only the handshake's LP
+        // (stable listener port) is registered for broadcasts.
         let peer_addr = s.peer_addr().map(|a| a.to_string()).unwrap_or_default();
-        {
-            let lp2 = lps_arc.clone();
-            let mut lp = lp2.lock().unwrap();
-            if !lp.contains(&peer_addr) {
-                lp.push(peer_addr.clone());
-            }
-        }
         std::thread::spawn(move || {
             s.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
             let _ = s.set_write_timeout(Some(std::time::Duration::from_secs(30)));
@@ -1220,6 +1299,9 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Me
                 let v = dero_crypto::p2p::decode_map(&hdr_frame);
                 let method = v.get("M").and_then(|m| m.as_str()).unwrap_or("").to_string();
                 let seq = v.get("S").and_then(|s| s.as_u64()).unwrap_or(0);
+                if method.is_empty() {
+                    eprintln!("p2p: UNKNOWN hdr frame {} bytes: {}", hdr_frame.len(), hex::encode(&hdr_frame[..hdr_frame.len().min(60)]));
+                }
                 // read the object frame (may be absent for errors)
                 let obj_frame = read_frame(&mut s).unwrap_or_default();
                 // handshake: the peer advertises its listener port (LP);
@@ -1442,7 +1524,7 @@ fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool, local_lp: 
             let genesis = block.height == 0;
             let k0 = store.k0_floor;
             let ChainStore { balance, sc_meta, .. } = store;
-            match chain::add_complete_block(balance, sc_meta, &block, &txs, block.height, genesis, k0) {
+            match chain::add_complete_block(balance, sc_meta, &block, &txs, block.height, genesis, k0, &store.sc_data_trees) {
                 Ok((_, _, _, sc_data)) => {
                     for (scid, tree) in sc_data {
                         store.sc_data_trees.insert(scid, tree);
@@ -1652,6 +1734,19 @@ fn main() {
         0
     };
 
+    // load the persisted mempool
+    if !data_dir.is_empty() {
+        let mut st = store.lock().unwrap();
+        let mut mp = mempool.lock().unwrap();
+        if let Err(e) = st.load_mempool(&data_dir, &mut mp) {
+            eprintln!("load mempool error: {e}");
+        } else {
+            println!("mempool loaded: {} txs", mp.txs.len());
+        }
+        drop(mp);
+        drop(st);
+    }
+
     // sync from peer (incremental: only pulls blocks above our height)
     {
         let mut st = store.lock().unwrap();
@@ -1807,8 +1902,8 @@ fn main() {
             sim_miner.solve(&mut blk);
             let genesis = blk.height == 0;
             let k0 = st.k0_floor;
-            let ChainStore { balance, sc_meta, .. } = &mut *st;
-            match chain::add_complete_block(balance, sc_meta, &blk, &txs, blk.height, genesis, k0) {
+            let ChainStore { balance, sc_meta, sc_data_trees, .. } = &mut *st;
+            match chain::add_complete_block(balance, sc_meta, &blk, &txs, blk.height, genesis, k0, sc_data_trees) {
                 Ok((_, _, _, sc_data)) => {
                     let rh = {
                         let b = st.balance.hash();
@@ -1820,6 +1915,9 @@ fn main() {
                         o
                     };
                     for (scid, tree) in sc_data {
+                        if std::env::var("SC_DEBUG").is_ok() {
+                            eprintln!("mine: SC data tree for {} ({} keys)", hex::encode(&scid[..8]), dero_crypto::graviton::tree_keys(&tree).len());
+                        }
                         st.sc_data_trees.insert(scid, tree);
                     }
                     st.blocks.push((blk.clone(), txs));
@@ -1832,6 +1930,12 @@ fn main() {
                         if let Err(e) = st.save(&data_dir) {
                             eprintln!("save error: {e}");
                         }
+                        // persist the mempool too (after mining, txs removed)
+                        let mps = mempool.lock().unwrap();
+                        if let Err(e) = st.save_mempool(&data_dir, &mps) {
+                            eprintln!("save mempool error: {e}");
+                        }
+                        drop(mps);
                     }
                     println!("mined block h{} {}", blk.height, hex::encode(&blk.get_hash()[..8]));
                 }

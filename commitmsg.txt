@@ -1,15 +1,30 @@
-feat(node): P2P handshake + GetSC + tx broadcast — complete the protocol
+feat(node): SC-call args + burn txs + P2P propagation + hardening
 
-- P2P handshake (Peer.Handshake with LP): incoming peers advertise their
-  listener port; the server registers "ip:lp" for tx broadcasts — peer
-  discovery works (A registered B at 127.0.0.1:26011)
-- P2P tx broadcast (Peer.NewTransactions + TXLIST): SubmitTX pushes the
-  raw blob to p2p peers; the receiving node stores it in its mempool
-  (wire-level verified: no errors, frames exchanged)
-- DERO.GetSC: serves contract code + variables from the node's per-SCID
-  data trees (captured during block apply) — PROVEN live: code returned,
-  variable k=7 from the Initialize STORE
-- add_complete_block returns the per-SCID SC data trees (chain.rs)
-- NOTE: block sync over P2P is fully proven (B tracks A live). Tx
-  propagation is wired and frame-exchanged; the mempool handoff is
-  best-effort while peers are in the same state window.
+Fixes the "fix it all up" sweep:
+
+1. SC-CALL WITH ARGS (the deep one — 3 stacked bugs):
+   - process_transaction_sc now forwards the tx's marshalled SCDATA to
+     execute_sc_function; params are built from the function's declared
+     params + SCDATA lookup (reference dvm/sc.go semantics)
+   - the wrapper's final data tree is flushed back into the cache (the
+     Go wrapper mutates the cache's tree in place; the Rust clone needed
+     an explicit flush)
+   - the cache flush is keyed by the SC_ID for calls (was the call txid)
+   - PROVEN: install (k=7) -> SetVal(x=42) -> GetSC shows k=42
+
+2. BURN TXS: wallet --burn <dest> <amount>; the builder sets TX_BURN
+   (4) when any transfer has burn>0
+
+3. P2P TX PROPAGATION: DERO.Transfer now broadcasts to P2P peers
+   (Peer.NewTransactions); the receiver adds to its mempool. B received
+   A's tx over the wire. Ephemeral-port noise removed (only the
+   handshake-LP peer is registered).
+
+4. MEMPOOL PERSISTENCE: --data-dir saves/loads the mempool (survives
+   restart, alongside the chain).
+
+5. REORG: sync_from_peer detects tip mismatch and re-syncs from genesis
+   (the reference pops + re-syncs).
+
+6. SC data trees persist across blocks (prior_sc_data seeds the
+   snapshot) so SC calls see contracts from earlier blocks.

@@ -12,7 +12,7 @@ use crate::curve::encode_compressed;
 use crate::elgamal::ElGamal;
 use crate::hash_to_point::base_g;
 use crate::rpc_args::Arguments;
-use crate::transaction::{Transaction, TX_NORMAL, TX_SC};
+use crate::transaction::{Transaction, TX_BURN, TX_NORMAL, TX_SC};
 use crate::wallet::{calc_r, calc_u, encrypt_decrypt_user_data, generate_shared_secret};
 use blake2::Digest;
 
@@ -63,7 +63,13 @@ pub fn build_transaction(
         version: 1,
         source_network: 0,
         dest_network: 0,
-        tx_type: if scdata.len() >= 1 { TX_SC } else { TX_NORMAL }, // 5 = SC_TX (Go TX_SC)
+        tx_type: if scdata.len() >= 1 {
+            TX_SC
+        } else if transfers.iter().any(|t| t.burn > 0) {
+            TX_BURN // 4 = Go TX_BURN
+        } else {
+            TX_NORMAL
+        }, // 5 = SC_TX (Go TX_SC)
         value: 0,
         miner_address: [0u8; 33],
         c: [0u8; 32],
