@@ -437,8 +437,9 @@ pub fn process_transaction_sc(
 
 /// Add_Complete_Block — apply a full block (its txs + the miner tx) to the
 /// persistent balance + SC_META trees. Returns (fees, balance_root,
-/// sc_meta_root). Mirrors blockchain.go Add_Complete_Block's execute phase
-/// (the commit/snapshot part is the caller's store).
+/// sc_meta_root, per-SCID SC data trees). Mirrors blockchain.go
+/// Add_Complete_Block's execute phase (the commit/snapshot part is the
+/// caller's store).
 pub fn add_complete_block(
     balance_tree: &mut Tree,
     sc_meta: &mut Tree,
@@ -447,7 +448,7 @@ pub fn add_complete_block(
     height: u64,
     genesis: bool,
     k0_floor: Option<u64>,
-) -> Result<(u64, [u8; 32], [u8; 32]), String> {
+) -> Result<(u64, [u8; 32], [u8; 32], std::collections::HashMap<[u8; 32], Tree>), String> {
     // ensure the miner is registered (zero balance) so the reward add works
     if !genesis && balance_tree.get(&bl.miner_tx.miner_address.to_vec()).is_none() {
         if let Ok(pk) = decode_compressed(&bl.miner_tx.miner_address) {
@@ -457,6 +458,7 @@ pub fn add_complete_block(
         }
     }
     let mut fees = 0u64;
+    let mut sc_data: std::collections::HashMap<[u8; 32], Tree> = std::collections::HashMap::new();
     for tx in txs {
         fees += process_transaction(&mut std::collections::HashMap::new(), tx, balance_tree, height, true);
         if tx.tx_type == TX_SC {
@@ -467,11 +469,16 @@ pub fn add_complete_block(
                 &mut cache, &mut ss, balance_tree, sc_meta, height, height, 0,
                 &blid, tx, k0_floor,
             );
+            // capture the SC data trees (per-SCID: code + variables) so the
+            // node can serve DERO.GetSC
+            for (scid, tree) in cache {
+                sc_data.insert(scid, tree);
+            }
         }
     }
     process_miner_transaction(
         &bl.miner_tx.miner_address, bl.miner_tx.value,
         &bl.mini_blocks, genesis, balance_tree, fees, height,
     );
-    Ok((fees, balance_tree.hash(), sc_meta.hash()))
+    Ok((fees, balance_tree.hash(), sc_meta.hash(), sc_data))
 }

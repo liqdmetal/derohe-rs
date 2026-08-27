@@ -54,6 +54,8 @@ struct ChainStore {
     /// per-SCID token balance trees (the SCID names a separate tree in the
     /// reference; maintained as SC txs execute)
     token_trees: HashMap<[u8; 32], Tree>,
+    /// per-SCID SC data trees (code + variables), maintained on SC apply
+    sc_data_trees: HashMap<[u8; 32], Tree>,
     height: u64,
     k0_floor: Option<u64>,
 }
@@ -70,6 +72,7 @@ impl ChainStore {
             genesis_snapshot: None,
             recent: VecDeque::new(),
             token_trees: HashMap::new(),
+            sc_data_trees: HashMap::new(),
             height: 0,
             k0_floor: Some(0), // simulator: K0 active from height 0
         }
@@ -420,10 +423,13 @@ fn sync_from_peer(store: &mut ChainStore, peer: &str, simulator: bool) -> Result
             }
         }
         // apply state
-        let (_, b_root, m_root) = chain::add_complete_block(
+        let (_, b_root, m_root, sc_data) = chain::add_complete_block(
             &mut store.balance, &mut store.sc_meta, &block, &txs, h,
             h == 0, store.k0_floor,
         ).map_err(|e| format!("h{h}: {e}"))?;
+        for (scid, tree) in sc_data {
+            store.sc_data_trees.insert(scid, tree);
+        }
         let xor = {
             let mut out = [0u8; 32];
             for i in 0..32 {
@@ -701,7 +707,7 @@ impl Miner {
 // HTTP JSON-RPC server
 // ---------------------------------------------------------------------------
 
-fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mutex<Mempool>>, miner: &Miner, peers: &[String]) -> String {
+fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mutex<Mempool>>, miner: &Miner, peers: &[String], p2p_peers: &[String], live_peers: &Arc<Mutex<Vec<String>>>) -> String {
     let v: serde_json::Value = match serde_json::from_str(req_body) {
         Ok(v) => v,
         Err(_) => return json_err(-32700, "parse error"),
@@ -1001,6 +1007,59 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
             }
             serde_json::json!({"txs": found})
         }
+        "DERO.GetSC" => {
+            // {scid, code, variables} -> the SC's code + variables from the
+            // node's per-SCID data trees (reference GetSC_Result shape)
+            let scid_hex = params["scid"].as_str().unwrap_or("");
+            let scid_b = match hex_decode(scid_hex.trim_start_matches("0x")) {
+                Ok(b) if b.len() == 32 => b,
+                _ => return json_err_id(-32000, "bad scid", id),
+            };
+            let mut scid = [0u8; 32];
+            scid.copy_from_slice(&scid_b);
+            let tree = st.sc_data_trees.get(&scid).cloned();
+            let want_code = params["code"].as_bool().unwrap_or(false);
+            let want_vars = params["variables"].as_bool().unwrap_or(false);
+            let mut out = serde_json::json!({"status": "OK", "scid": scid_hex, "balance": 0});
+            if let Some(t) = tree {
+                if want_code {
+                    let code_key = dero_crypto::sc::sc_code_key();
+                    if let Some(v) = t.get(&code_key) {
+                        // Variable unmarshal -> string code
+                        if let Ok(var) = dero_crypto::dvm::Variable::unmarshal_binary(&v) {
+                            out["code"] = serde_json::json!(var.value_string);
+                        }
+                    }
+                }
+                if want_vars {
+                    let mut stringkeys = serde_json::Map::new();
+                    let mut uint64keys = serde_json::Map::new();
+                    for k in dero_crypto::graviton::tree_keys(&t) {
+                        if k == dero_crypto::sc::sc_code_key() {
+                            continue;
+                        }
+                        if let Some(v) = t.get(&k) {
+                            if let Ok(var) = dero_crypto::dvm::Variable::unmarshal_binary(&v) {
+                                match var.vtype {
+                                    dero_crypto::dvm::Vtype::String => {
+                                        stringkeys.insert(hex::encode(&k), serde_json::json!(var.value_string));
+                                    }
+                                    dero_crypto::dvm::Vtype::Uint64 => {
+                                        stringkeys.insert(hex::encode(&k), serde_json::json!(var.value_uint64));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    out["stringkeys"] = serde_json::Value::Object(stringkeys);
+                    out["uint64keys"] = serde_json::Value::Object(uint64keys);
+                }
+            } else {
+                out["status"] = serde_json::json!("SC not installed");
+            }
+            out
+        }
         "DERO.GetStateRoot" => serde_json::json!({"roothash": hex::encode(st.roothash())}),
         "DERO.DumpBalances" => {
             let want_h = params["height"].as_u64().unwrap_or(0);
@@ -1080,11 +1139,23 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 mp.add(tx, raw.clone())
             };
             if added {
-                // P2P relay: forward the raw blob to every peer (fire and
-                // forget — the peer verifies before accepting)
+                // P2P relay: forward the raw blob to every HTTP peer AND
+                // every P2P peer (Peer.NewTransactions — the real wire)
                 let blob_hex = hex::encode(&raw);
                 for p in peers {
                     let _ = rpc_call(p, "DERO.SubmitTX", serde_json::json!({"blob": blob_hex.clone()}));
+                }
+                for pp in p2p_peers.clone() {
+                    if let Err(e) = p2p_broadcast_tx(&pp, &blob_hex) {
+                        eprintln!("p2p broadcast {pp}: {e}");
+                    }
+                }
+                // also broadcast to live incoming P2P peers
+                let lp = live_peers.lock().unwrap();
+                for pp in lp.iter() {
+                    if let Err(e) = p2p_broadcast_tx(pp, &blob_hex) {
+                        eprintln!("p2p broadcast {pp}: {e}");
+                    }
                 }
                 serde_json::json!({"txid": hex::encode(txid), "status": "OK"})
             } else {
@@ -1113,7 +1184,7 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
 /// Serve the DERO peer protocol (4-byte-length + CBOR framing). Handles
 /// the sync subset: Peer.Chain (block hash lists) and Peer.GetObject
 /// (block bodies). This is the REAL derohe wire protocol (p2p/wire_structs.go).
-fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>) {
+fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Mempool>>, live_peers: Arc<Mutex<Vec<String>>>) {
     use dero_crypto::p2p::{cbor, read_frame, write_frame};
     let listener = match TcpListener::bind(("0.0.0.0", p2p_port)) {
         Ok(l) => l,
@@ -1126,6 +1197,17 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>) {
     for stream in listener.incoming() {
         let Ok(mut s) = stream else { continue };
         let st = store.clone();
+        let mp = mempool.clone();
+        let lps_arc = live_peers.clone();
+        // record the incoming peer so we can broadcast txs to it
+        let peer_addr = s.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+        {
+            let lp2 = lps_arc.clone();
+            let mut lp = lp2.lock().unwrap();
+            if !lp.contains(&peer_addr) {
+                lp.push(peer_addr.clone());
+            }
+        }
         std::thread::spawn(move || {
             s.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
             let _ = s.set_write_timeout(Some(std::time::Duration::from_secs(30)));
@@ -1140,6 +1222,31 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>) {
                 let seq = v.get("S").and_then(|s| s.as_u64()).unwrap_or(0);
                 // read the object frame (may be absent for errors)
                 let obj_frame = read_frame(&mut s).unwrap_or_default();
+                // handshake: the peer advertises its listener port (LP);
+                // record it so we can reach it for tx broadcasts
+                if method == "Peer.Handshake" {
+                    let vo = dero_crypto::p2p::decode_map(&obj_frame);
+                    let lp = vo.get("LP").and_then(|x| x.as_u64()).unwrap_or(0);
+                    if lp > 0 {
+                        let ip = peer_addr
+                            .rsplit_once(':')
+                            .map(|(ip, _)| ip.to_string())
+                            .unwrap_or_else(|| peer_addr.clone());
+                        let fixed = format!("{ip}:{lp}");
+                        let lp3 = lps_arc.clone();
+                        let mut lps = lp3.lock().unwrap();
+                        if !lps.contains(&fixed) {
+                            lps.push(fixed);
+                            println!("p2p: registered peer {ip}:{lp} for broadcasts");
+                        }
+                    }
+                    let hdr = cbor::header("", seq, "");
+                    let body = cbor::map(1);
+                    if write_frame(&mut s, &hdr).is_err() || write_frame(&mut s, &body).is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 let store_g = st.lock().unwrap();
                 let body: Vec<u8> = match method.as_str() {
                     "Peer.Chain" => {
@@ -1191,6 +1298,54 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>) {
                         body.extend_from_slice(&cbor::kv("CBLOCKS", &cb));
                         body
                     }
+                    "Peer.NewTransaction" | "Peer.NewTransactions" => {
+                        // tx propagation: {TXLIST: [blobs]} -> add to our
+                        // mempool (verified against our state)
+                        let vobj = dero_crypto::p2p::decode_map(&obj_frame);
+                        let mut count = 0u64;
+                        let txlist = vobj
+                            .get("TXLIST")
+                            .and_then(|b| b.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let mut new_txs: Vec<(Transaction, Vec<u8>)> = Vec::new();
+                        let txlist_len = {
+                            let vobj = dero_crypto::p2p::decode_map(&obj_frame);
+                            vobj.get("TXLIST").and_then(|b| b.as_array()).map(|a| a.len()).unwrap_or(0)
+                        };
+                        println!("p2p: NewTransactions received, txlist_len={txlist_len}");
+                        for t in &txlist {
+                            let raw = match t.as_str().map(hex_decode) {
+                                Some(Ok(r)) => r,
+                                _ => continue,
+                            };
+                            // accept into the mempool; if the referenced state
+                            // isn't in our snapshot window yet, still store it
+                            // (A already verified it; B reconciles on sync)
+                            if let Ok(tx) = Transaction::deserialize(&raw, 2)
+                                .or_else(|_| Transaction::deserialize(&raw, 3))
+                            {
+                                let bpp = tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(2);
+                                let txid = tx.get_hash(bpp);
+                                if !store_g_has(&store_g, &txid) {
+                                    new_txs.push((tx, raw));
+                                    count += 1;
+                                }
+                            }
+                        }
+                        drop(store_g);
+                        // add to the mempool (no deadlock: store_g dropped)
+                        if !new_txs.is_empty() {
+                            let mut mpg = mp.lock().unwrap();
+                            for (tx, raw) in new_txs {
+                                mpg.add(tx, raw);
+                            }
+                        }
+                        let mut body = cbor::map(2);
+                        body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+                        body.extend_from_slice(&cbor::kv("RECEIVED", &cbor::int(count as i64)));
+                        body
+                    }
                     _ => {
                         // unknown method: error response
                         let mut body = cbor::map(1);
@@ -1209,10 +1364,20 @@ fn serve_p2p(p2p_port: u16, store: Arc<Mutex<ChainStore>>) {
 
 /// P2P client: pull blocks from a peer over the real DERO wire protocol
 /// (Peer.Chain for the hash list, Peer.GetObject for block bodies).
-fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool) -> Result<u64, String> {
+fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool, local_lp: u32) -> Result<u64, String> {
     use dero_crypto::p2p::{cbor, read_frame, write_frame};
     let mut s = TcpStream::connect(addr).map_err(|e| format!("p2p connect {addr}: {e}"))?;
     s.set_read_timeout(Some(std::time::Duration::from_secs(60))).ok();
+    // handshake: advertise our local P2P listener port (LP) so the peer can
+    // reach us for tx broadcasts. The reference's Handshake_Struct uses LP.
+    let mut hs = cbor::map(2);
+    hs.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+    hs.extend_from_slice(&cbor::kv("LP", &cbor::uint(local_lp as u64)));
+    write_frame(&mut s, &cbor::header("Peer.Handshake", 0, "")).map_err(|e| format!("p2p write: {e}"))?;
+    write_frame(&mut s, &hs).map_err(|e| format!("p2p write: {e}"))?;
+    // read the handshake response (header + object)
+    let _hdr = read_frame(&mut s).map_err(|e| format!("p2p read hdr: {e}"))?;
+    let _resp = read_frame(&mut s).map_err(|e| format!("p2p read: {e}"))?;
     // Peer.Chain request: TWO frames — header {M,S} then object
     let mut body = cbor::map(3);
     body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
@@ -1230,7 +1395,7 @@ fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool) -> Result<
         .cloned()
         .unwrap_or_default();
     let start_h = v.get("SH").and_then(|s| s.as_i64()).unwrap_or(0).max(0) as u64;
-    println!("p2p chain resp: SH={start_h} blist_len={}", blist.len());
+    println!("p2p chain resp: SH={start_h} blist_len={} keys={:?}", blist.len(), v.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()));
     if blist.is_empty() {
         return Ok(0);
     }
@@ -1278,7 +1443,10 @@ fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool) -> Result<
             let k0 = store.k0_floor;
             let ChainStore { balance, sc_meta, .. } = store;
             match chain::add_complete_block(balance, sc_meta, &block, &txs, block.height, genesis, k0) {
-                Ok(_) => {
+                Ok((_, _, _, sc_data)) => {
+                    for (scid, tree) in sc_data {
+                        store.sc_data_trees.insert(scid, tree);
+                    }
                     store.blocks.push((block.clone(), txs));
                     store.txids.push(Vec::new());
                     store.raw_txs.push(Vec::new());
@@ -1306,6 +1474,30 @@ fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool) -> Result<
     Ok(applied)
 }
 
+/// Does the chain (or mempool) already contain this txid?
+fn store_g_has(st: &ChainStore, txid: &[u8; 32]) -> bool {
+    st.txids.iter().any(|tids| tids.iter().any(|t| t == txid))
+}
+
+/// Broadcast a raw tx to a P2P peer over the real wire protocol
+/// (Peer.NewTransactions with TXLIST).
+fn p2p_broadcast_tx(addr: &str, blob_hex: &str) -> Result<(), String> {
+    use dero_crypto::p2p::{cbor, read_frame, write_frame};
+    let mut s = TcpStream::connect(addr).map_err(|e| format!("p2p connect {addr}: {e}"))?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+    let mut body = cbor::map(2);
+    body.extend_from_slice(&cbor::kv("COMMON", &cbor::map(0)));
+    let mut txlist = cbor::array(1);
+    txlist.extend_from_slice(&cbor::bytes(&hex_decode(blob_hex)?));
+    body.extend_from_slice(&cbor::kv("TXLIST", &txlist));
+    write_frame(&mut s, &cbor::header("Peer.NewTransactions", 3, ""))
+        .map_err(|e| format!("p2p write: {e}"))?;
+    write_frame(&mut s, &body).map_err(|e| format!("p2p write: {e}"))?;
+    let _hdr = read_frame(&mut s).map_err(|e| format!("p2p read hdr: {e}"))?;
+    let _resp = read_frame(&mut s).map_err(|e| format!("p2p read: {e}"))?;
+    Ok(())
+}
+
 fn json_err(code: i64, msg: &str) -> String {
     serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":code,"message":msg}}).to_string()
 }
@@ -1313,7 +1505,7 @@ fn json_err_id(code: i64, msg: &str, id: serde_json::Value) -> String {
     serde_json::json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":msg}}).to_string()
 }
 
-fn serve(port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Mempool>>, miner: Arc<Miner>, peers: Arc<Vec<String>>) {
+fn serve(port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Mempool>>, miner: Arc<Miner>, peers: Arc<Vec<String>>, p2p_peers: Arc<Vec<String>>, live_peers: Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
     println!("node RPC listening on 127.0.0.1:{port}");
     for stream in listener.incoming() {
@@ -1350,7 +1542,7 @@ fn serve(port: u16, store: Arc<Mutex<ChainStore>>, mempool: Arc<Mutex<Mempool>>,
                 let resp = if body.trim().is_empty() {
                     json_err(-32700, "empty request")
                 } else {
-                    handle_rpc(body, &store, &mempool, &miner, &peers)
+                    handle_rpc(body, &store, &mempool, &miner, &peers, &p2p_peers, &live_peers)
                 };
                 let out = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1501,13 +1693,19 @@ fn main() {
     let miner = Arc::new(Miner { address: wallet_addr, simulator: true, secret: wallet_secret });
     let m3 = miner.clone();
     let peers_arc = Arc::new(peers.clone());
+    let p2p_peers_arc = Arc::new(p2p_peers.clone());
     let p2 = peers_arc.clone();
-    std::thread::spawn(move || serve(port, s2, m2, m3, p2));
+    let p2p2 = p2p_peers_arc.clone();
+    let live_peers = Arc::new(Mutex::new(Vec::<String>::new()));
+    let live2 = live_peers.clone();
+    std::thread::spawn(move || serve(port, s2, m2, m3, p2, p2p2, live2));
 
-    // P2P: serve the real DERO peer protocol (block sync to other nodes)
+    // P2P: serve the real DERO peer protocol (block sync + tx propagation)
     if p2p_port > 0 {
         let s4 = store.clone();
-        std::thread::spawn(move || serve_p2p(p2p_port, s4));
+        let m4 = mempool.clone();
+        let live3 = live_peers.clone();
+        std::thread::spawn(move || serve_p2p(p2p_port, s4, m4, live3));
     }
 
     // keep-synced loop: pull new blocks from every peer periodically
@@ -1532,7 +1730,7 @@ fn main() {
                 }
             }
             for p in p4.iter() {
-                match p2p_sync_from(&mut st, p, simulator) {
+                match p2p_sync_from(&mut st, p, simulator, p2p_port as u32) {
                     Ok(n) => {
                         if n > 0 {
                             println!("p2p pulled {n} blocks from {p}");
@@ -1611,7 +1809,7 @@ fn main() {
             let k0 = st.k0_floor;
             let ChainStore { balance, sc_meta, .. } = &mut *st;
             match chain::add_complete_block(balance, sc_meta, &blk, &txs, blk.height, genesis, k0) {
-                Ok((_, _, _)) => {
+                Ok((_, _, _, sc_data)) => {
                     let rh = {
                         let b = st.balance.hash();
                         let m = st.sc_meta.hash();
@@ -1621,6 +1819,9 @@ fn main() {
                         }
                         o
                     };
+                    for (scid, tree) in sc_data {
+                        st.sc_data_trees.insert(scid, tree);
+                    }
                     st.blocks.push((blk.clone(), txs));
                     st.roothashes.push(rh);
                     st.height = blk.height;
