@@ -200,8 +200,15 @@ fn process_payload(    tree: &mut Tree,
                 (kv.0.clone(), nb.serialize())
             }
         };
-        let mut nb = crate::balance_serdes::NonceBalance::deserialize(&balance_serialized)
-            .expect("bad balance");
+        let mut nb = match crate::balance_serdes::NonceBalance::deserialize(&balance_serialized) {
+            Ok(n) => n,
+            Err(_) => {
+                // token (SC-asset) trees store 8-byte u64 asset values, not
+                // NonceBalances — skip non-conforming leaves (the reference
+                // reads SC asset values via LoadSCAssetValue instead)
+                continue;
+            }
+        };
         // homomorphic addition of changes: C[i] (Left), D (Right)
         let echanges = construct_elgamal(&st.c[i], &st.d);
         nb.balance = nb.balance.add(&echanges);
@@ -482,7 +489,13 @@ pub fn add_complete_block(
         ss.trees.insert(String::from_utf8_lossy(scid).to_string(), tree.clone());
     }
     for tx in txs {
-        fees += process_transaction(&mut std::collections::HashMap::new(), tx, balance_tree, height, true);
+        // the changed-cache must contain the prior SC data trees so token
+        // (non-zero-scid) payloads resolve their balance tree
+        let mut changed = std::collections::HashMap::new();
+        for (scid, tree) in &sc_data {
+            changed.insert(*scid, tree.clone());
+        }
+        fees += process_transaction(&mut changed, tx, balance_tree, height, true);
         if tx.tx_type == TX_SC {
             let mut cache = std::collections::HashMap::new();
             let blid = bl.get_hash();

@@ -1928,7 +1928,10 @@ fn main() {
                         if std::env::var("SC_DEBUG").is_ok() {
                             eprintln!("mine: SC data tree for {} ({} keys)", hex::encode(&scid[..8]), dero_crypto::graviton::tree_keys(&tree).len());
                         }
-                        st.sc_data_trees.insert(scid, tree);
+                        st.sc_data_trees.insert(scid, tree.clone());
+                        // the SC's data tree is also its TOKEN balance tree
+                        // (per-SCID tree holds code/vars AND asset balances)
+                        st.token_trees.insert(scid, tree);
                     }
                     st.blocks.push((blk.clone(), txs));
                     st.roothashes.push(rh);
