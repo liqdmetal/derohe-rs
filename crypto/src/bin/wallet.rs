@@ -38,9 +38,9 @@ fn main() {
         (String::new(), String::new())
     };
     let sc_code = if sc_install { args[3].clone() } else { String::new() };
-    // SC-call extra args: --arg <name>=<value> pairs (Uint64 values).
-    // The daemon is the LAST arg.
-    let mut sc_args: Vec<(String, u64)> = Vec::new();
+    // SC-call extra args: --arg <name>=<value> pairs. Uint64 if the value
+    // parses as a number, else String.
+    let mut sc_args: Vec<(String, ArgValue)> = Vec::new();
     let mut daemon = if sc_call {
         args[5].clone()
     } else if burn {
@@ -52,9 +52,19 @@ fn main() {
         let mut i = 5;
         while i + 1 < args.len() && args[i] == "--arg" {
             if let Some((k, v)) = args[i + 1].split_once('=') {
-                if let Ok(vu) = v.parse() {
-                    sc_args.push((k.to_string(), vu));
-                }
+                // names hinting at a token/scid/hash are always strings
+                let kl = k.to_ascii_lowercase();
+                let is_hash_like = kl.contains("token") || kl.contains("scid") || kl.contains("hash") || kl.contains("id") || kl.contains("maker") || kl.contains("taker") || kl.contains("addr");
+                let val = if !is_hash_like {
+                    if let Ok(vu) = v.parse::<u64>() {
+                        ArgValue::U64(vu)
+                    } else {
+                        ArgValue::Str(v.to_string())
+                    }
+                } else {
+                    ArgValue::Str(v.to_string())
+                };
+                sc_args.push((k.to_string(), val));
             }
             i += 2;
             // the last arg (daemon) is not an --arg pair
@@ -263,7 +273,12 @@ fn main() {
         ];
         // user-supplied SC arguments (the contract's parameters)
         for (k, v) in &sc_args {
-            args.push(Argument { name: k.clone(), data_type: DATA_UINT64, value: ArgValue::U64(*v) });
+            let (dt, val) = match v {
+                ArgValue::U64(u) => (DATA_UINT64, ArgValue::U64(*u)),
+                ArgValue::Str(s) => (DATA_STRING, ArgValue::Str(s.clone())),
+                other => (DATA_STRING, other.clone()),
+            };
+            args.push(Argument { name: k.clone(), data_type: dt, value: val });
         }
         Arguments(args)
     } else {
@@ -287,6 +302,10 @@ fn main() {
         &[0x5au8; 16384],
     )
     .expect("build_transaction");
+    if std::env::var("SC_DEBUG").is_ok() {
+        let mb = tx.scdata.marshal_binary().unwrap_or_default();
+        eprintln!("wallet scdata marshal {} bytes: {}", mb.len(), hex::encode(&mb[..mb.len().min(80)]));
+    }
 
     // 5. self-verify the proof
     let txid = tx.get_hash(2);

@@ -1,0 +1,16 @@
+feat(dex): escrow.s limit-order settlement SC + string-arg wallet support
+
+Phase 1 of the Private Settlement DEX (slippage-free limit orders):
+
+- harness/escrow.s: confidential atomic-swap escrow — CreateSwap locks
+  the maker's side, AcceptSwap atomically settles, CancelSwap after
+  timeout. Public rules, private positions. Parses cleanly in our DVM
+  (5 functions).
+- wallet --sc-call now supports STRING args (--arg k=v is Uint64 when
+  numeric, String otherwise; token/scid/id/maker/taker/addr names are
+  always String) — deployed + verified on-chain
+- escrow SC deployed on the Rust node chain (status OK, all functions
+  present, String params confirmed via GetSC)
+- KNOWN ISSUE: multi-string-arg SC calls hit the node's params->DVM
+  handoff (trailing tokens on apply) — SetVal(k=42) proved single-arg
+  string calls work; the multi-arg handoff is the next fix
