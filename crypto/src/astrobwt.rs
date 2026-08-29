@@ -263,7 +263,7 @@ fn length_8_32(text: &[u8], sa: &mut [i32], num_lms: usize) {
     let mut i = text.len() as isize - 1;
     while i >= 0 {
         c0 = text[i as usize];
-        cx = cx << 8 | (c1 as u32 + 1);
+        cx = cx << 8 | (c1.wrapping_add(1) as u32);
         if c0 < c1 {
             is_type_s = true;
         } else if c0 > c1 && is_type_s {

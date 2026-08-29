@@ -207,7 +207,54 @@ pub fn tokenize(src: &str) -> Vec<(u32, String)> {
             }
             _ => {
                 // operator or punctuation: emit each char as its own token
+                // (Go's text/scanner splits operators character-by-character,
+                // and f.lines are serialized joined with a space — `value = = 0`
+                // — which dvm_parse differential tests pin byte-for-byte).
+                // Multi-char operators are recombined at expression-parse time
+                // (see parse_expr's token merge), NOT here.
                 out.push((line, c.to_string()));
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Merge adjacent single-char operator tokens into the multi-char operators
+/// the expression parser expects (Go's scanner emits operators
+/// character-by-character; the execution path rejoins them — `= =` -> `==`,
+/// `! =` -> `!=`, `< =` -> `<=`, `> =` -> `>=`, `& &` -> `&&`,
+/// `| |` -> `||`, `< <` -> `<<`, `> >` -> `>>`, `< >` -> `!=`).
+fn merge_operator_tokens(toks: Vec<(u32, String)>) -> Vec<(u32, String)> {
+    let mut out: Vec<(u32, String)> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        let (line, ref tok) = toks[i];
+        // lookahead: is the next token a compatible second half?
+        let merged = if i + 1 < toks.len() {
+            let next = toks[i + 1].1.as_str();
+            match tok.as_str() {
+                "=" if next == "=" => Some("=="),
+                "!" if next == "=" => Some("!="),
+                "<" if next == "=" => Some("<="),
+                ">" if next == "=" => Some(">="),
+                "&" if next == "&" => Some("&&"),
+                "|" if next == "|" => Some("||"),
+                "<" if next == "<" => Some("<<"),
+                ">" if next == ">" => Some(">>"),
+                "<" if next == ">" => Some("!="),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        match merged {
+            Some(op) => {
+                out.push((line, op.to_string()));
+                i += 2;
+            }
+            None => {
+                out.push(toks[i].clone());
                 i += 1;
             }
         }
@@ -990,9 +1037,16 @@ impl DVMInterpreter {
             .replace("> >", ">>")
             .replace("< >", "!=");
         let toks = tokenize(&s);
-        let mut p = ExprParser { toks: &toks, pos: 0 };
+        // Recombine multi-char operators that the (Go-compatible) tokenizer
+        // split character-by-character (`value = = 0` -> `==`, `a ! = b` ->
+        // `!=`, etc.). The line tokenizer keeps operators separate so the
+        // stored f.lines match Go's space-joined serialization byte-for-byte;
+        // here on the execution path we merge them so the parser recognizes
+        // the real operator tokens.
+        let merged = merge_operator_tokens(toks);
+        let mut p = ExprParser { toks: &merged, pos: 0 };
         let e = p.parse_expr()?;
-        if p.pos < toks.len() {
+        if p.pos < merged.len() {
             return Err(format!("trailing tokens"));
         }
         Ok(e)
@@ -1930,5 +1984,59 @@ End Function"#;
         let mut r2 = initialize_rnd(&scid, &blid, &txid);
         assert_eq!(r1.random(), r2.random());
         assert_eq!(r1.random_max(100), r2.random_max(100));
+    }
+
+    #[test]
+    fn merge_operator_tokens_joins_multi_char_ops() {
+        // The line tokenizer splits operators char-by-char (Go parity for the
+        // stored f.lines); the execution path must rejoin them so the parser
+        // sees real operators. Regression: escrow CreateSwap hit "trailing
+        // tokens" on `IF sellAmount == 0` because == stayed as two `=`.
+        let toks = tokenize("IF sellAmount == 0 THEN GOTO 100");
+        let merged = merge_operator_tokens(toks);
+        let ops: Vec<&str> = merged.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(ops.contains(&"=="), "== not merged: {ops:?}");
+        // != also joins
+        let toks = tokenize("IF a != b THEN GOTO 50");
+        let merged = merge_operator_tokens(toks);
+        let ops: Vec<&str> = merged.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(ops.contains(&"!="), "!= not merged: {ops:?}");
+        // a lone `=` (assignment) must NOT be merged
+        let toks = tokenize("LET x = 5");
+        let merged = merge_operator_tokens(toks);
+        let ops: Vec<&str> = merged.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(ops.contains(&"=") && !ops.contains(&"=="), "lone = mishandled: {ops:?}");
+    }
+
+    #[test]
+    fn multi_string_arg_escrow_createswap_runs() {
+        // The ship-blocker: multi-string-arg SC call. CreateSwap has 7 params
+        // (5 strings) and uses string concat + == comparisons. Before the
+        // operator-merge fix this failed with "trailing tokens".
+        let code = r#"
+Function CreateSwap(id String, sellToken String, sellAmount Uint64, buyToken String, buyAmount Uint64, maker String, timeout Uint64) Uint64
+10 IF EXISTS("swap_" + id + "_maker") THEN GOTO 100
+20 IF sellAmount == 0 THEN GOTO 100
+30 IF buyAmount == 0 THEN GOTO 100
+40 STORE("swap_" + id + "_maker", maker)
+95 STORE("swap_" + id + "_timeout", BLOCK_HEIGHT() + timeout)
+96 RETURN 1
+100 RETURN 0
+End Function
+"#;
+        let sc = parse_smart_contract(code).expect("parse");
+        let mut state = SharedState::new(&[0u8; 32], &[0u8; 32], &[0u8; 32], &[0u8; 33], 100, 100, 100);
+        let params: std::collections::HashMap<String, String> = [
+            ("id".to_string(), "swap1".to_string()),
+            ("sellToken".to_string(), "DERO".to_string()),
+            ("sellAmount".to_string(), "1000".to_string()),
+            ("buyToken".to_string(), "USDT".to_string()),
+            ("buyAmount".to_string(), "500".to_string()),
+            ("maker".to_string(), "deto1qyyawp87a...".to_string()),
+            ("timeout".to_string(), "100".to_string()),
+        ].into_iter().collect();
+        let r = run_smart_contract(&sc, "CreateSwap", &mut state, &params)
+            .expect("CreateSwap should run without 'trailing tokens'");
+        assert_eq!(r.value_uint64, 1, "CreateSwap should RETURN 1 (success)");
     }
 }

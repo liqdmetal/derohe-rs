@@ -1167,27 +1167,6 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     Err(e) => Err(e),
                 }
             }
-            "proof_verify" => {
-                // verify a proof against a statement + txid (cross-check)
-                let stmt_b = hex_decode(&s("stmt")?)?;
-                let (stmt, _used) = dero_crypto::bulletproof::Statement::deserialize(&stmt_b)
-                    .map_err(|e| format!("stmt: {e}"))?;
-                let proof_b = hex_decode(&s("proof")?)?;
-                let proof = dero_crypto::bulletproof::deserialize(&proof_b, stmt.publickeylist.len().max(1).ilog2() as usize)
-                    .map_err(|e| format!("proof: {e}"))?;
-                let txid = hex_decode(&s("txid")?)?;
-                let mut txid_a = [0u8; 32];
-                txid_a.copy_from_slice(&txid);
-                let scid = hex_decode(&s("scid")?)?;
-                let mut scid_a = [0u8; 32];
-                scid_a.copy_from_slice(&scid);
-                let index: i32 = s("index")?.parse().map_err(|e| format!("index: {e}"))?;
-                let burn: u64 = s("burn")?.parse().map_err(|e| format!("burn: {e}"))?;
-                let ok = dero_crypto::bulletproof::verify(
-                    &scid_a, index, &stmt, &proof, &txid_a, burn,
-                );
-                Ok(json!({"ok": ok}))
-            }
             "keccak256" | "keccak512" => {
                 let data = hex_decode(&s("data")?)?;
                 let out = if op == "keccak256" {
@@ -1200,17 +1179,6 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "base_g" => {
                 let p = hash_to_point::base_g();
                 Ok(json!({"point": hex::encode(encode_compressed(&p))}))
-            }
-            "elgamal_deserialize" => {
-                let data = hex_decode(&s("data")?)?;
-                // 66-byte ElGamal (Left 33 + Right 33)
-                if data.len() != 66 {
-                    return Err(format!("need 66 bytes, got {}", data.len()));
-                }
-                let left = decode_compressed(&data[..33]).map_err(|e| format!("left: {e}"))?;
-                let right = decode_compressed(&data[33..]).map_err(|e| format!("right: {e}"))?;
-                Ok(json!({"left": hex::encode(encode_compressed(&left)),
-                          "right": hex::encode(encode_compressed(&right))}))
             }
             "pedersen_gparams" => {
                 let p = pedersen::generator_params(128);
