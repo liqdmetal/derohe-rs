@@ -13,8 +13,8 @@ Function CreateSwap(id String, sellToken String, sellAmount Uint64, buyToken Str
 80 STORE("swap_" + id + "_buyAmount", buyAmount)
 90 STORE("swap_" + id + "_state", 0)
 95 STORE("swap_" + id + "_timeout", BLOCK_HEIGHT() + timeout)
-96 RETURN 1
-100 RETURN 0
+96 RETURN 0
+100 RETURN 1
 End Function
 
 Function AcceptSwap(id String, taker String) Uint64
@@ -22,8 +22,8 @@ Function AcceptSwap(id String, taker String) Uint64
 20 IF SIGNER() == LOAD("swap_" + id + "_maker") THEN GOTO 100
 30 STORE("swap_" + id + "_taker", taker)
 40 STORE("swap_" + id + "_state", 1)
-50 RETURN 1
-100 RETURN 0
+50 RETURN 0
+100 RETURN 1
 End Function
 
 Function CancelSwap(id String) Uint64
@@ -33,12 +33,12 @@ Function CancelSwap(id String) Uint64
 40 IF SIGNER() == LOAD("swap_" + id + "_maker") THEN GOTO 50
 45 GOTO 100
 50 STORE("swap_" + id + "_state", 3)
-55 RETURN 1
+55 RETURN 0
 60 IF BLOCK_HEIGHT() > LOAD("swap_" + id + "_timeout") THEN GOTO 70
 65 GOTO 100
 70 STORE("swap_" + id + "_state", 3)
-75 RETURN 1
-100 RETURN 0
+75 RETURN 0
+100 RETURN 1
 End Function
 
 Function GetSwap(id String) Uint64

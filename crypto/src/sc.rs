@@ -7,7 +7,7 @@
 
 use crate::dvm::{self, run_smart_contract_internal, SmartContract, Variable};
 use crate::elgamal::ElGamal;
-use crate::graviton::Tree;
+use crate::graviton::{tree_keys, Tree};
 use crate::hash_to_point::base_g;
 use crate::curve::decode_compressed;
 
@@ -151,6 +151,12 @@ pub fn execute_sc_function(
     };
 
     let mut state = dvm::SharedState::new(scid, blid, txid, signer, bl_height, bl_topoheight, bl_timestamp);
+    // Pre-seed the store's raw_keys with the committed SC data tree so that
+    // LOAD inside this call sees state STOREd by EARLIER calls (e.g.
+    // AcceptSwap reads CreateSwap's maker/state/timeout). New STOREs in this
+    // call overwrite the seeded entries; the flush below re-writes all of them
+    // back to the tree, which is idempotent. Mirrors Go's diskloader.
+    seed_store_from_tree(&mut state.store, data_tree);
     if std::env::var("SC_DEBUG").is_ok() {
         eprintln!("execute_sc_function: entrypoint={entrypoint} params={params:?}");
     }
@@ -186,6 +192,26 @@ pub fn execute_sc_function(
 
     let _ = (w_sc_tree, balance_at_start, scdata_bytes, gasstorage_incoming);
     Ok((0, 0))
+}
+
+/// Seed a fresh TXStorage's raw_keys with the committed SC data tree so LOAD
+/// sees state STOREd by earlier calls. Key = DataKey marshal (same bytes the
+/// flush writes to the tree and STORE uses for raw_keys); value = Variable
+/// marshal. Mirrors Go's diskloader.
+pub fn seed_store_from_tree(store: &mut dvm::TXStorage, data_tree: &TreeWrapper) {
+    // pending writes in the wrapper take precedence over the committed tree
+    for (k, v) in &data_tree.entries {
+        if !v.is_empty() {
+            store.raw_keys.insert(String::from_utf8_lossy(k).into_owned(), v.clone());
+        }
+    }
+    for k in tree_keys(&data_tree.tree) {
+        if let Some(v) = data_tree.tree.get(&k) {
+            if !v.is_empty() {
+                store.raw_keys.insert(String::from_utf8_lossy(&k).into_owned(), v);
+            }
+        }
+    }
 }
 
 /// ReadSC (sc.go): the SC's DERO balance + parsed code.

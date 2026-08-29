@@ -1900,14 +1900,12 @@ impl TXStorage {
             }
             return value;
         }
-        // disk loader (not wired in the pure crate; returns Invalid)
+        // disk loader: raw_keys is pre-seeded by execute_sc_function with the
+        // committed SC data tree, so LOAD sees state STOREd by earlier calls.
+        // (execute_sc_function copies tree entries into raw_keys before run.)
         if let Some(state) = &mut self.state {
             let v = Variable { name: String::new(), vtype: Vtype::Invalid, value_uint64: 0, value_string: String::new() };
-            if v.length() > 10 {
-                state.consume_storage_gas(v.length() / 10);
-            } else {
-                state.consume_storage_gas(1);
-            }
+            state.consume_storage_gas(1.max(v.length() / 10));
         }
         Variable { name: String::new(), vtype: Vtype::Invalid, value_uint64: 0, value_string: String::new() }
     }
@@ -2020,8 +2018,8 @@ Function CreateSwap(id String, sellToken String, sellAmount Uint64, buyToken Str
 30 IF buyAmount == 0 THEN GOTO 100
 40 STORE("swap_" + id + "_maker", maker)
 95 STORE("swap_" + id + "_timeout", BLOCK_HEIGHT() + timeout)
-96 RETURN 1
-100 RETURN 0
+96 RETURN 0
+100 RETURN 1
 End Function
 "#;
         let sc = parse_smart_contract(code).expect("parse");
@@ -2037,6 +2035,6 @@ End Function
         ].into_iter().collect();
         let r = run_smart_contract(&sc, "CreateSwap", &mut state, &params)
             .expect("CreateSwap should run without 'trailing tokens'");
-        assert_eq!(r.value_uint64, 1, "CreateSwap should RETURN 1 (success)");
+        assert_eq!(r.value_uint64, 0, "CreateSwap should RETURN 0 (success, commits)");
     }
 }
