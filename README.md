@@ -12,7 +12,7 @@ as a black-box test oracle and never committed. See `NOTICE.md`.
 
 | Layer | Status |
 |---|---|
-| Consensus core | 2,575+ differential vectors + 66 unit tests, byte-identical vs Go |
+| Consensus core | 2,575+ differential vectors + 71 unit tests, byte-identical vs Go |
 | Block/chain | byte-identical replay; mainnet BLIDs reproduce 29/29; reorg 27/27 |
 | PoW | AstroBWTv3 byte-identical (90/90 live miniblocks) |
 | Smart contracts | DVM parse/run byte-identical; SC install 16/16; SC deploy via wallet |
@@ -62,7 +62,7 @@ derohe-reference/  Go reference (gitignored; differential oracle only)
 ```bash
 # differential suite (builds both oracles, runs all vectors)
 python3 harness/difftest.py
-cd crypto && cargo test --release        # 66 unit tests
+cd crypto && cargo test --release        # 71 unit tests
 
 # node: sync + mine + wallet in one
 ./crypto/target/release/node.exe \
