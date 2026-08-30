@@ -1121,8 +1121,8 @@ impl<'a> ExprParser<'a> {
                 Some("-") => Some('-'),
                 Some("|") => Some('|'),
                 Some("^") => Some('^'),
-                Some(">>") => Some('>'),
-                Some("<<") => Some('<'),
+                Some(">>") => Some('r'),  // SHR (shift-right); '>' is GTR in parse_cmp
+                Some("<<") => Some('l'),  // SHL (shift-left); '<' is LSS in parse_cmp
                 _ => None,
             };
             match op {
@@ -1357,8 +1357,10 @@ impl DVMInterpreter {
                 '&' => l & r,
                 '|' => l | r,
                 '^' => l ^ r,
-                '<' => l << r,
-                '>' => l >> r,
+                '<' => if l < r { 1 } else { 0 },   // LSS (less-than); Go token.LSS
+                '>' => if l > r { 1 } else { 0 },   // GTR (greater-than); Go token.GTR
+                'l' => l << r,                       // SHL; parse_add maps "<<" here
+                'r' => l >> r,                       // SHR; parse_add maps ">>" here
                 '=' => if l == r { 1 } else { 0 },
                 '!' => if l != r { 1 } else { 0 },
                 '{' => if l <= r { 1 } else { 0 },
@@ -1747,7 +1749,8 @@ fn builtin_send_asset_to_address(dvm: &mut DVMInterpreter, args: &[Expr]) -> Res
 
 fn builtin_derovalue(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(0, args.len());
-    Ok(ExprValue::Uint64(*dvm.state.assets.get(&dvm.state.scid_zero).unwrap_or(&0)))
+    let v = *dvm.state.assets.get(&dvm.state.scid_zero).unwrap_or(&0);
+    Ok(ExprValue::Uint64(v))
 }
 
 fn builtin_assetvalue(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
@@ -1782,12 +1785,20 @@ fn builtin_strlen(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, 
     Ok(ExprValue::Uint64(v.as_string().ok_or("strlen argument must be valid string")?.len() as u64))
 }
 
+/// Build a Rust String that holds raw (possibly non-UTF-8) bytes, matching
+/// Go's byte-string semantics (`string(hash[:])`). The DVM treats string
+/// values as opaque byte strings (as_bytes/len/concat/hex), never as UTF-8,
+/// so this is safe and byte-exact.
+fn raw_bytes_string(bytes: &[u8]) -> String {
+    unsafe { String::from_utf8_unchecked(bytes.to_vec()) }
+}
+
 fn builtin_sha256(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(1, args.len());
     let v = dvm.eval(&args[0])?;
     let s = v.as_string().ok_or("input argument must be valid string")?;
     let h = crate::sha2_256(s.as_bytes());
-    Ok(ExprValue::String(String::from_utf8_lossy(&h).into_owned()))
+    Ok(ExprValue::String(raw_bytes_string(&h)))
 }
 
 fn builtin_sha3256(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
@@ -1795,7 +1806,7 @@ fn builtin_sha3256(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue,
     let v = dvm.eval(&args[0])?;
     let s = v.as_string().ok_or("input argument must be valid string")?;
     let h = crate::sha3_256(s.as_bytes());
-    Ok(ExprValue::String(String::from_utf8_lossy(&h).into_owned()))
+    Ok(ExprValue::String(raw_bytes_string(&h)))
 }
 
 fn builtin_keccak256(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
@@ -1803,7 +1814,7 @@ fn builtin_keccak256(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValu
     let v = dvm.eval(&args[0])?;
     let s = v.as_string().ok_or("input argument must be valid string")?;
     let h = crate::keccak::keccak256(s.as_bytes());
-    Ok(ExprValue::String(String::from_utf8_lossy(&h).into_owned()))
+    Ok(ExprValue::String(raw_bytes_string(&h)))
 }
 
 fn builtin_hex(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {

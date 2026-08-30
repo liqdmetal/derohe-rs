@@ -151,6 +151,12 @@ pub fn execute_sc_function(
     };
 
     let mut state = dvm::SharedState::new(scid, blid, txid, signer, bl_height, bl_topoheight, bl_timestamp);
+    // Wire incoming assets into the DVM state so DEROVALUE()/ASSETVALUE()
+    // read them (Go sc.go:245-250 does state.Assets[asset] += value). Without
+    // this, DEROVALUE() always returns 0 even when value is sent to the SC.
+    for (asset, value) in incoming_value {
+        *state.assets.entry(*asset).or_insert(0) += value;
+    }
     // Pre-seed the store's raw_keys with the committed SC data tree so that
     // LOAD inside this call sees state STOREd by EARLIER calls (e.g.
     // AcceptSwap reads CreateSwap's maker/state/timeout). New STOREs in this
