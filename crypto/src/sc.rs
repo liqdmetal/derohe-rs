@@ -18,7 +18,7 @@ pub struct TreeWrapper {
     pub transfers: Vec<TransferExternal>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TransferExternal {
     pub asset: [u8; 32],
     pub address: [u8; 33],
@@ -195,6 +195,14 @@ pub fn execute_sc_function(
         }
     }
     data_tree.entries.clear();
+
+    // flush the DVM's accumulated external transfers (SEND_*) into the wrapper
+    // so sanity_check_external_transfers / process_external_transfers see them.
+    // Go sc.go:323: on success copy Transfers[scid].TransferE into the data tree
+    // (only this SC's own transfers, keyed by the executing SCID).
+    if let Some(transfers) = state.store.transfers.get(scid) {
+        data_tree.transfers.extend(transfers.iter().cloned());
+    }
 
     let _ = (w_sc_tree, balance_at_start, scdata_bytes, gasstorage_incoming);
     Ok((0, 0))

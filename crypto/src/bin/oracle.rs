@@ -1784,7 +1784,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     monitor_recursion: 0,
                     monitor_lines_interpreted: 0,
                     monitor_ops: 0,
-                    store: Box::new(TXStorage { scid, raw_keys: HashMap::new(), state: None }),
+                    store: Box::new(TXStorage { scid, raw_keys: HashMap::new(), transfers: HashMap::new(), state: None }),
                     rnd: initialize_rnd(&scid, &blid, &txid),
                 };
                 state.store.state = Some(state.clone());
@@ -1797,7 +1797,9 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 match result {
                     Ok(v) => {
                         out.insert("ok".into(), json!(true));
-                        out.insert("ret_type".into(), json!(v.vtype as u8));
+                        // Go oracle emits ret_type as a string (fmt.Sprintf) —
+                        // match it so the differential diff is byte-exact.
+                        out.insert("ret_type".into(), json!((v.vtype as u8).to_string()));
                         match v.vtype {
                             Vtype::Uint64 => { out.insert("ret".into(), json!(v.value_uint64.to_string())); }
                             Vtype::String => { out.insert("ret".into(), json!(v.value_string)); }
@@ -1810,6 +1812,25 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                             kv.insert(k.clone(), json!(hex::encode(&state.store.raw_keys[k])));
                         }
                         out.insert("store".into(), json!(kv));
+                        // Emit external transfers (SEND_*) accumulated during
+                        // execution, mirroring the Go oracle's dvm_run output so
+                        // difftest can compare send_external byte-for-byte.
+                        let mut senders: Vec<[u8; 32]> = state.store.transfers.keys().cloned().collect();
+                        senders.sort();
+                        let mut transfers = Vec::new();
+                        for sender in senders {
+                            if let Some(list) = state.store.transfers.get(&sender) {
+                                for t in list {
+                                    transfers.push(json!({
+                                        "sender": hex::encode(sender),
+                                        "asset": hex::encode(t.asset),
+                                        "address": hex::encode(t.address),
+                                        "amount": t.amount.to_string(),
+                                    }));
+                                }
+                            }
+                        }
+                        out.insert("transfers".into(), json!(transfers));
                     }
                     Err(e) => {
                         out.insert("ok".into(), json!(false));

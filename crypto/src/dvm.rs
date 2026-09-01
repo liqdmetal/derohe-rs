@@ -521,7 +521,7 @@ impl SharedState {
             },
             assets: HashMap::new(), assets_transfer: HashMap::new(), ram_store: HashMap::new(),
             monitor_recursion: 0, monitor_lines_interpreted: 0, monitor_ops: 0,
-            store: Box::new(TXStorage { scid: *scid, raw_keys: HashMap::new(), state: None }),
+            store: Box::new(TXStorage { scid: *scid, raw_keys: HashMap::new(), transfers: HashMap::new(), state: None }),
             rnd: Rnd { key: rnd_key, pos: 1 },
         }
     }
@@ -544,6 +544,11 @@ impl SharedState {
 pub struct TXStorage {
     pub scid: [u8; 32],
     pub raw_keys: HashMap<String, Vec<u8>>,
+    /// External transfers accumulated during SC execution, keyed by sender
+    /// SCID (mirrors Go `TX_Storage.Transfers map[crypto.Hash]SC_Transfers`).
+    /// On a successful call (RETURN 0), sc.go:323 copies `Transfers[scid].TransferE`
+    /// into the data tree; on error they are discarded with the revert.
+    pub transfers: HashMap<[u8; 32], Vec<crate::sc::TransferExternal>>,
     pub state: Option<SharedState>,
 }
 
@@ -719,7 +724,7 @@ pub fn run_smart_contract_internal(
             chain_inputs: BlockchainInput { scid: [0; 32], blid: [0; 32], txid: [0; 32], signer: String::new(), bl_height: 0, bl_topoheight: 0, bl_timestamp: 0 },
             assets: HashMap::new(), assets_transfer: HashMap::new(), ram_store: HashMap::new(),
             monitor_recursion: 0, monitor_lines_interpreted: 0, monitor_ops: 0,
-            store: Box::new(TXStorage { scid: [0; 32], raw_keys: HashMap::new(), state: None }),
+            store: Box::new(TXStorage { scid: [0; 32], raw_keys: HashMap::new(), transfers: HashMap::new(), state: None }),
             rnd: Rnd { key: [0; 32], pos: 1 },
         }),
         ip: 0,
@@ -1936,9 +1941,17 @@ impl TXStorage {
     }
 
     pub fn send_external(&mut self, sender_scid: [u8; 32], asset: [u8; 32], addr: String, amount: u64) {
-        // transfers collected in the tree wrapper layer (blockchain); the pure
-        // crate records them here for differential tests
-        let _ = (sender_scid, asset, addr, amount);
+        // Mirror Go TX_Storage.SendExternal: append a TransferExternal to the
+        // transfers accumulated for this sender SCID. The address arrives as a
+        // 33-byte compressed-point string (validated by the caller).
+        let mut address = [0u8; 33];
+        let b = addr.as_bytes();
+        let n = b.len().min(33);
+        address[..n].copy_from_slice(&b[..n]);
+        self.transfers
+            .entry(sender_scid)
+            .or_default()
+            .push(crate::sc::TransferExternal { asset, address, amount });
     }
 }
 

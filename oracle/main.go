@@ -2860,6 +2860,30 @@ func handle(id int, op string, raw json.RawMessage) {
 			kv[k] = hex.EncodeToString(state.Store.RawKeys[k])
 		}
 		out["store"] = kv
+
+		// Emit external transfers (SEND_*) accumulated during execution, sorted by
+		// sender SCID then insertion order, so the differential harness can compare
+		// the Rust DVM's send_external against Go's SendExternal byte-for-byte.
+		transfers := []map[string]interface{}{}
+		senderIDs := []crypto.Hash{}
+		for sender := range state.Store.Transfers {
+			senderIDs = append(senderIDs, sender)
+		}
+		sort.Slice(senderIDs, func(i, j int) bool {
+			return string(senderIDs[i][:]) < string(senderIDs[j][:])
+		})
+		for _, sender := range senderIDs {
+			st := state.Store.Transfers[sender]
+			for _, t := range st.TransferE {
+				transfers = append(transfers, map[string]interface{}{
+					"sender":  hex.EncodeToString(sender[:]),
+					"asset":   hex.EncodeToString(t.Asset[:]),
+					"address": hex.EncodeToString([]byte(t.Address)),
+					"amount":  fmt.Sprintf("%d", t.Amount),
+				})
+			}
+		}
+		out["transfers"] = transfers
 		ok(id, out)
 
 	// ---- Phase 10: DVM address/hash builtins (bech32 differential) --------

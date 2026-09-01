@@ -978,6 +978,11 @@ End Function""",
         "assets": r"""Function bal() Uint64
 10 RETURN DEROVALUE()
 End Function""",
+        "send": r"""Function Pay(target String) Uint64
+10 SEND_DERO_TO_ADDRESS(target, 1234)
+20 SEND_ASSET_TO_ADDRESS(target, 3000, "ABABABABABABABABABABABABABABABAB")
+30 RETURN 0
+End Function""",
     }
 
     for name, code in contracts.items():
@@ -989,7 +994,7 @@ End Function""",
         txidh = "%064x" % txid
         add_l("dvm_parse", {"code": code})
         # run the main entrypoint (capitalized) with a couple params
-        entry = name
+        entry = "Pay" if name == "send" else name
         params = {}
         if name == "math":
             params = {"a": str(rng.randrange(1, 100)), "b": str(rng.randrange(1, 100))}
@@ -997,6 +1002,10 @@ End Function""",
             params = {"value": str(rng.randrange(0, 2))}
         elif name == "strings":
             params = {"name": "world"}
+        elif name == "send":
+            # SEND_* recipients are raw 33-byte compressed-point addresses; they
+            # must arrive as a param (a source literal would be 66 ASCII bytes).
+            params = {"target": "\x00" * 31 + "\x01\x00"}
         add_l("dvm_run", {
             "code": code, "entrypoint": entry, "params": params,
             "scid": scidh, "blid": blidh, "txid": txidh,

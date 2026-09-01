@@ -6,7 +6,7 @@ End Function
 ' Atomic settlement (hash-lock / HTLC, RelayOS ADR-0041/0043 "atomicity
 ' without custody").
 '
-' Two-leg atomic swap with real value movement, grounded in DERO DVM
+' Two-leg atomic swap with REAL value movement, grounded in DERO DVM
 ' constraints:
 '   - Success = RETURN 0 (nonzero is "Discarded knowingly" -> no commit)
 '   - Recipient addresses are STORED compressed 33-byte keys (SIGNER() is
@@ -16,18 +16,28 @@ End Function
 '   - Refund after timeout returns the locked asset to the stored funder
 '     (independent per-leg refund; worst case is waiting out your own timeout).
 '
+' Value movement (the payout legs):
+'   - Fund locks the maker's DERO into the SC balance.
+'   - Claim (preimage reveal) pays the locked value OUT to the stored taker.
+'   - Refund (after timeout, funder only) pays the locked value OUT to the
+'     stored funder.
+'   The SEND_* legs are executed only when the entrypoint returns 0; a
+'   nonzero return ("Discarded knowingly") aborts and the value stays in the
+'   SC balance.
+'
 ' State keys (per swap id):
-'   _maker, _sellToken, _sellAmount, _buyToken, _buyAmount, _hashlock,
-'   _funded (amount actually locked), _state (0 init, 1 funded, 2 settled,
-'   3 refunded), _timeout
+'   _maker, _taker, _sellToken, _sellAmount, _buyToken, _buyAmount,
+'   _hashlock, _funded (actual amount locked), _state (0 init, 1 funded,
+'   2 settled, 3 refunded), _timeout
 ' ---------------------------------------------------------------------------
 
-Function CreateSwap(id String, maker String, sellToken String, sellAmount Uint64, buyToken String, buyAmount Uint64, hashlock String, timeout Uint64) Uint64
+Function CreateSwap(id String, maker String, taker String, sellToken String, sellAmount Uint64, buyToken String, buyAmount Uint64, hashlock String, timeout Uint64) Uint64
 10 IF EXISTS("swap_" + id + "_maker") THEN GOTO 100
 20 IF sellAmount == 0 THEN GOTO 100
 30 IF buyAmount == 0 THEN GOTO 100
 40 IF timeout == 0 THEN GOTO 100
 50 STORE("swap_" + id + "_maker", maker)
+55 STORE("swap_" + id + "_taker", taker)
 60 STORE("swap_" + id + "_sellToken", sellToken)
 70 STORE("swap_" + id + "_sellAmount", sellAmount)
 80 STORE("swap_" + id + "_buyToken", buyToken)
@@ -39,37 +49,43 @@ Function CreateSwap(id String, maker String, sellToken String, sellAmount Uint64
 100 RETURN 1
 End Function
 
-' Fund: the maker locks sellAmount into the SC. In DVM the value arrives as
-' the tx's incoming asset to the SC; the SC records how much is funded.
+' Fund: the maker locks value into the SC. DEROVALUE() is the amount actually
+' sent in this tx; we track the REAL amount (_funded), not the nominal
+' sellAmount, so over-funding is captured and refunded in full.
 Function Fund(id String, funder String) Uint64
 10 IF EXISTS("swap_" + id + "_maker") == 0 THEN GOTO 100
 20 IF LOAD("swap_" + id + "_state") != 0 THEN GOTO 100
 30 IF LOAD("swap_" + id + "_maker") != funder THEN GOTO 100
 40 IF DEROVALUE() < LOAD("swap_" + id + "_sellAmount") THEN GOTO 100
-50 STORE("swap_" + id + "_funded", LOAD("swap_" + id + "_sellAmount"))
+50 STORE("swap_" + id + "_funded", DEROVALUE())
 60 STORE("swap_" + id + "_state", 1)
 70 RETURN 0
 100 RETURN 1
 End Function
+
 ' Claim: reveal the preimage. SHA256(preimage) must equal the stored
-' hashlock. On success, mark settled (state 2). The actual token delivery is
-' the SEND_* executed by the settlement leg (in this contract we record the
-' state; a full build adds the SendAssetToAddress legs).
+' hashlock. On success, deliver the locked value to the stored taker (the
+' counterparty who proves knowledge of the secret) and mark settled.
 Function Claim(id String, preimage String) Uint64
 10 IF LOAD("swap_" + id + "_state") != 1 THEN GOTO 100
 20 IF HEX(SHA256(preimage)) != LOAD("swap_" + id + "_hashlock") THEN GOTO 100
-30 STORE("swap_" + id + "_state", 2)
-40 RETURN 0
+30 SEND_DERO_TO_ADDRESS(LOAD("swap_" + id + "_taker"), LOAD("swap_" + id + "_funded"))
+40 STORE("swap_" + id + "_state", 2)
+50 RETURN 0
 100 RETURN 1
 End Function
 
-' Refund: after the timeout, the funder (or anyone) can mark the swap
-' refunded so the locked asset returns to the stored funder.
-Function Refund(id String) Uint64
+' Refund: after the timeout, the stored funder (and only the funder) can
+' recover the locked value. The refund leg pays back to the stored maker
+' address (== funder), so even a griefing call can only ever move value to
+' the legitimate owner.
+Function Refund(id String, funder String) Uint64
 10 IF LOAD("swap_" + id + "_state") != 1 THEN GOTO 100
 20 IF BLOCK_HEIGHT() <= LOAD("swap_" + id + "_timeout") THEN GOTO 100
-30 STORE("swap_" + id + "_state", 3)
-40 RETURN 0
+30 IF LOAD("swap_" + id + "_maker") != funder THEN GOTO 100
+40 SEND_DERO_TO_ADDRESS(LOAD("swap_" + id + "_maker"), LOAD("swap_" + id + "_funded"))
+50 STORE("swap_" + id + "_state", 3)
+60 RETURN 0
 100 RETURN 1
 End Function
 
@@ -85,3 +101,14 @@ Function GetMaker(id String) String
 100 RETURN ""
 End Function
 
+Function GetTaker(id String) String
+10 IF EXISTS("swap_" + id + "_maker") == 0 THEN GOTO 100
+20 RETURN LOAD("swap_" + id + "_taker")
+100 RETURN ""
+End Function
+
+Function GetFunded(id String) Uint64
+10 IF EXISTS("swap_" + id + "_maker") == 0 THEN GOTO 100
+20 RETURN LOAD("swap_" + id + "_funded")
+100 RETURN 0
+End Function
