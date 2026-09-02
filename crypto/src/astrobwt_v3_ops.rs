@@ -9,7 +9,7 @@
 #[inline]
 
 pub fn apply_op(op: u8, s: &mut [u8; 256], pos1: usize, pos2: usize,
-                rc4s: &mut Rc4, tries: u64, lhash_out: &mut u64, prev_out: &mut u64) {
+                rc4s: &mut Rc4, _tries: u64, lhash_out: &mut u64, prev_out: &mut u64) {
     // rebind to locals so the generated bodies can use them directly
     let (mut lhash, mut prev_lhash) = (*lhash_out, *prev_out);
     match op {

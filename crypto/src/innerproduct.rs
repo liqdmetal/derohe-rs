@@ -10,7 +10,7 @@
 //! Challenge transcripts use the UNCOMPRESSED 64-byte point encoding.
 //! Honest P for a length-n statement: Σ Gs[i]^as[i] + Σ Hs[i]^bs[i] + u^(as·bs).
 
-use ark_bn254::{G1Projective, G1Affine};
+use ark_bn254::G1Projective;
 use ark_ec::PrimeGroup;
 use ark_ff::{Field, PrimeField};
 use ark_ff::fields::AdditiveGroup;
@@ -234,7 +234,7 @@ mod tests {
         let ip = generate(&params, &p, &as_, &bs, &salt);
         assert_eq!(ip.ls.len(), 7);
         assert!(verify(&ip, &params.hs, &params.h, &p, &salt, &params));
-        let _ = G1Affine::from(p);
+        let _ = ark_bn254::G1Affine::from(p);
         let _ = be32_to_bigint(&mk(1));
     }
 }

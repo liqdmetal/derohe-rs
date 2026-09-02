@@ -16,7 +16,7 @@ use crate::curve::decode_compressed;
 use crate::elgamal::ElGamal;
 use crate::transaction::Transaction;
 use crate::wallet::decode_balance;
-use ark_bn254::{Fr, G1Projective};
+use ark_bn254::Fr;
 
 /// One tracked transfer entry (mirrors Go rpc.Entry).
 #[derive(Debug, Clone, PartialEq)]
@@ -139,7 +139,7 @@ impl WalletState {
 #[allow(clippy::too_many_arguments)]
 pub fn process_tx_change(
     secret: &Fr,
-    scid: [u8; 32],
+    _scid: [u8; 32],
     tx: &Transaction,
     payload_index: usize,
     our_pos: usize,

@@ -149,7 +149,7 @@ impl Transaction {
     /// node in simulator mode where the reference skips proof verification.
     pub fn deserialize_skip_proofs(buf: &[u8]) -> Result<Transaction, String> {
         let mut pos = 0usize;
-        let mut take_var = |buf: &[u8], pos: &mut usize| -> Result<u64, String> {
+        let take_var = |buf: &[u8], pos: &mut usize| -> Result<u64, String> {
             let (v, n) = uvarint_decode(&buf[*pos..]).ok_or("bad varint")?;
             if n <= 0 {
                 return Err("bad varint".into());
@@ -318,9 +318,9 @@ impl Transaction {
     }
 
     /// Go `Deserialize`. bpp = expected bytes_per_publickey (3 on mainnet).
-    pub fn deserialize(buf: &[u8], bpp: u8) -> Result<Transaction, String> {
+    pub fn deserialize(buf: &[u8], _bpp: u8) -> Result<Transaction, String> {
         let mut pos = 0usize;
-        let mut take_var = |buf: &[u8], pos: &mut usize| -> Result<u64, String> {
+        let take_var = |buf: &[u8], pos: &mut usize| -> Result<u64, String> {
             let (v, n) = uvarint_decode(&buf[*pos..]).ok_or("bad varint")?;
             if n <= 0 {
                 return Err("bad varint".into());

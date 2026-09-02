@@ -54,7 +54,7 @@ pub fn sc_code_key() -> Vec<u8> {
 }
 
 /// LoadSCAssetValue: the SC's balance for an asset (8-byte BE u64 at asset key).
-pub fn load_sc_asset_value(data: &TreeWrapper, scid: &[u8; 32], asset: &[u8; 32]) -> u64 {
+pub fn load_sc_asset_value(data: &TreeWrapper, _scid: &[u8; 32], asset: &[u8; 32]) -> u64 {
     let key = asset.to_vec();
     match data.get(&key) {
         Some(v) if v.len() == 8 => u64::from_be_bytes(v.try_into().unwrap()),

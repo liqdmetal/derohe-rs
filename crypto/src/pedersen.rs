@@ -11,7 +11,7 @@
 //!   GSUM = Σ Gs[i]
 //! (Go pads the hex of i to 64 chars then decodes to 32 bytes == BE32(i).)
 
-use ark_bn254::{G1Affine, G1Projective};
+use ark_bn254::G1Projective;
 use ark_ec::PrimeGroup;
 use ark_ff::PrimeField;
 use ark_ff::fields::AdditiveGroup;
@@ -148,6 +148,6 @@ mod tests {
             expect += h.mul_bigint(fr_from_be_bytes(&hv.element(i)).into_bigint());
         }
         assert_eq!(c1, expect);
-        let _ = G1Affine::from(c1);
+        let _ = ark_bn254::G1Affine::from(c1);
     }
 }

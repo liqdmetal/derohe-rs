@@ -8,7 +8,7 @@
 //! binomial (RecursivePolynomials). Replicated exactly.
 
 use ark_bn254::Fr;
-use ark_ff::{Field, One};
+use ark_ff::Field;
 
 use crate::fieldvector::{fr_from_be_bytes, fr_to_be_bytes};
 

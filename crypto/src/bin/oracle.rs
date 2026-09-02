@@ -897,7 +897,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 roothash.copy_from_slice(&rh);
                 let r = dero_crypto::wallet::calc_r(&roothash, &publickeylist, &secret);
                 let amount: u64 = s("amount")?.parse().map_err(|e| format!("amount: {e}"))?;
-                let bpp = (max_bits / 8) as u8;
+                let _bpp = (max_bits / 8) as u8;
                 let mut c: Vec<ark_bn254::G1Projective> = Vec::new();
                 for k in 0..publickeylist.len() {
                     let delta: i64 = if k == wi0 { -(amount as i64) } else if k == wi1 { amount as i64 } else { 0 };
@@ -981,7 +981,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 // shared = keccak(compressed(receiver_pk * r))
                 // key    = keccak(shared || receiver_comp)
                 let r_hex = s("r")?;
-                let r = dero_crypto::curve::be32_to_bigint(&hex_decode(&r_hex)?);
+                let _r = dero_crypto::curve::be32_to_bigint(&hex_decode(&r_hex)?);
                 let r_fr = ark_bn254::Fr::from_le_bytes_mod_order(&{
                     let mut le = [0u8; 32];
                     let be = hex_decode(&r_hex)?;
@@ -1020,7 +1020,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let txid = tx.get_hash(bpp);
                 let mut scid_map: std::collections::HashMap<[u8; 32], i32> = std::collections::HashMap::new();
                 let mut all_ok = true;
-                for (i, p) in tx.payloads.iter().enumerate() {
+                for (_i, p) in tx.payloads.iter().enumerate() {
                     let index = *scid_map.get(&p.scid).unwrap_or(&0);
                     if let Some(proof) = &p.proof {
                         let ok = dero_crypto::bulletproof::verify(
@@ -1910,7 +1910,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 Ok(serde_json::Value::Object(out))
             }
             "grav_put" | "grav_delete" | "grav_get" => {
-                use dero_crypto::graviton::Tree;
+                
                 let tname = s("tree")?;
                 let tree = grav_tree_mut(&tname);
                 let key = hex_decode(&s("key")?)?;
@@ -1995,7 +1995,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             }
             "chain_miner_tx" => {
                 use dero_crypto::chain;
-                use dero_crypto::graviton::Tree;
+                
                 let genesis = s_key(inp, "genesis").map(|v| v == "true").unwrap_or(false);
                 let fees: u64 = s_key(inp, "fees").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
                 let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
@@ -2134,7 +2134,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 Ok(json!({"hash": hex::encode(bt.hash())}))
             }
             "chain_sc_install" => {
-                use dero_crypto::sc::{self, Snapshot, TreeWrapper};
+                use dero_crypto::sc::Snapshot;
                 use dero_crypto::graviton::Tree;
                 use std::collections::HashMap;
                 let blob = hex_decode(&s("blob")?)?;

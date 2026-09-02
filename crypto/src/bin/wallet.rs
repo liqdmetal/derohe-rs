@@ -4,7 +4,7 @@
 //! transfer, and broadcast it to the daemon. End-to-end proof that the
 //! Rust implementation can spend on a live DERO network.
 
-use dero_crypto::bulletproof::{generate_proof, verify, Statement, Witness};
+use dero_crypto::bulletproof::verify;
 use dero_crypto::curve::encode_compressed;
 use dero_crypto::elgamal::ElGamal;
 use dero_crypto::hash_to_point::base_g;
@@ -12,7 +12,6 @@ use dero_crypto::mnemonics::words_to_key;
 use dero_crypto::rpc_addr::address_to_compressed;
 use dero_crypto::rpc_args::{Argument, ArgValue, Arguments, DATA_HASH, DATA_STRING, DATA_UINT64, SC_ACTION, SC_CODE};
 use dero_crypto::tx_builder::{build_transaction, RingMember, Transfer};
-use dero_crypto::wallet::{calc_r, generate_shared_secret, reduced_hash};
 use ark_bn254::Fr;
 use ark_ec::PrimeGroup;
 use ark_ff::PrimeField;

@@ -326,7 +326,7 @@ pub fn process_transaction_sc(
         })
         .unwrap_or([0u8; 33]);
 
-    use crate::sc::{execute_sc_function, process_external, read_sc, sanity_check_external_transfers, sc_code_key, sc_meta_key, store_sc_value, wrapped_tree, TreeWrapper};
+    use crate::sc::{execute_sc_function, process_external, read_sc, sanity_check_external_transfers, sc_code_key, sc_meta_key, wrapped_tree, TreeWrapper};
 
     // NOTE: Go wraps the CALLER's sc_tree directly (transaction_execute.go:
     // w_sc_tree := &Tree_Wrapper{Tree: sc_tree, ...}) so meta writes land in

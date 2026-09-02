@@ -216,7 +216,7 @@ impl Block {
     /// Deserialize does NOT reject trailing bytes.
     pub fn deserialize(buf: &[u8]) -> Result<Block, String> {
         let mut pos = 0usize;
-        let mut take_var = |buf: &[u8], pos: &mut usize| -> Result<u64, String> {
+        let take_var = |buf: &[u8], pos: &mut usize| -> Result<u64, String> {
             let (v, n) = uvarint_decode(&buf[*pos..]).ok_or("bad varint")?;
             if n <= 0 {
                 return Err("bad varint".into());

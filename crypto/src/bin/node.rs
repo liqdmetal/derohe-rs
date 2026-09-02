@@ -20,7 +20,7 @@
 //! DERO peer protocol (4-byte-length + CBOR framing) so other nodes can
 //! sync blocks directly.
 
-use dero_crypto::balance_serdes::{uvarint_encode, NonceBalance};
+use dero_crypto::balance_serdes::NonceBalance;
 use dero_crypto::block::{sha3_256, Block, MiniBlock};
 use dero_crypto::bulletproof::{verify, Statement};
 use dero_crypto::chain;
@@ -805,7 +805,7 @@ impl Miner {
             return;
         }
         // real AstroBWTv3 PoW — the ported, verified algorithm
-        let header = block.serialize(false);
+        let _header = block.serialize(false);
         let nonce0 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -1175,7 +1175,7 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 }
                 if want_vars {
                     let mut stringkeys = serde_json::Map::new();
-                    let mut uint64keys = serde_json::Map::new();
+                    let uint64keys = serde_json::Map::new();
                     for k in dero_crypto::graviton::tree_keys(&t) {
                         if k == dero_crypto::sc::sc_code_key() {
                             continue;
@@ -1287,7 +1287,7 @@ fn handle_rpc(req_body: &str, store: &Arc<Mutex<ChainStore>>, mempool: &Arc<Mute
                 for p in peers {
                     let _ = rpc_call(p, "DERO.SubmitTX", serde_json::json!({"blob": blob_hex.clone()}));
                 }
-                for pp in p2p_peers.clone() {
+                for pp in p2p_peers {
                     if let Err(e) = p2p_broadcast_tx(&pp, &blob_hex) {
                         eprintln!("p2p broadcast {pp}: {e}");
                     }
@@ -1553,7 +1553,7 @@ fn p2p_sync_from(store: &mut ChainStore, addr: &str, simulator: bool, local_lp: 
     common.extend_from_slice(&cbor::kv("HEIGHT", &cbor::int(0)));
     common.extend_from_slice(&cbor::kv("THEIGHT", &cbor::int(0)));
     common.extend_from_slice(&cbor::kv("SHEIGHT", &cbor::int(0)));
-    let mut state = cbor::bytes(&[0u8; 32]);
+    let state = cbor::bytes(&[0u8; 32]);
     common.extend_from_slice(&cbor::kv("STATE", &state));
     common.extend_from_slice(&cbor::kv("HF", &cbor::uint(0)));
     body.extend_from_slice(&cbor::kv("COMMON", &common));
@@ -2018,7 +2018,7 @@ fn main() {
             }
             drop(mp2);
             // mine it (simulator: no PoW)
-            let mut sim_miner = Miner { address: addr, simulator: true, secret: None };
+            let sim_miner = Miner { address: addr, simulator: true, secret: None };
             sim_miner.solve(&mut blk);
             let genesis = blk.height == 0;
             let k0 = st.k0_floor;

@@ -8,7 +8,7 @@
 //! (unity = 14a3074b...46edd), omega = unity^((2^28)/length).
 
 use ark_bn254::Fr;
-use ark_ff::{Field, One};
+use ark_ff::Field;
 
 use crate::fieldvector::{fr_from_be_bytes, fr_to_be_bytes, FieldVector};
 use crate::pointvector::PointVector;

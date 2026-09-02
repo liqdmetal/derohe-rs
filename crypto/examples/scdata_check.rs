@@ -2,7 +2,7 @@ use dero_crypto::rpc_args::Arguments;
 
 fn main() {
     // the exact marshal from the wallet (291 bytes)
-    let hexdata = "aa636964536573776170316653434f4e53545055455354".to_string();
+    let _hexdata = "aa636964536573776170316653434f4e53545055455354".to_string();
     // use the full 291 bytes — reconstruct from a marshal round-trip with the same args
     use dero_crypto::rpc_args::{Argument, ArgValue, DATA_STRING, DATA_UINT64, DATA_HASH};
     let args = Arguments(vec![

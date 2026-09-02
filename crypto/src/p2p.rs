@@ -242,7 +242,7 @@ fn decode_value(buf: &[u8]) -> Option<serde_json::Value> {
     }
 }
 
-fn advance(buf: &[u8], v: &serde_json::Value) -> usize {
+fn advance(buf: &[u8], _v: &serde_json::Value) -> usize {
     // estimate the byte length of the encoded value by re-decoding —
     // simplest correct approach: use the raw byte length from the head.
     if buf.is_empty() {

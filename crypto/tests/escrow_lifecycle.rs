@@ -150,7 +150,7 @@ impl Ctx {
         }
         let scdata = Arguments(a.clone());
         let args = Arguments(a);
-        let bytes = args.marshal_binary().expect("marshal scdata");
+        let _bytes = args.marshal_binary().expect("marshal scdata");
         let params: std::collections::HashMap<String, String> = {
             let mut p = std::collections::HashMap::new();
             if let Some(f) = self.sc.functions.get(entrypoint) {

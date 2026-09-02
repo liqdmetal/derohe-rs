@@ -253,7 +253,7 @@ fn induce_sub_s_8_32(text: &[u8], sa: &mut [i32], freq: &mut [i32], bucket: &mut
     }
 }
 
-fn length_8_32(text: &[u8], sa: &mut [i32], num_lms: usize) {
+fn length_8_32(text: &[u8], sa: &mut [i32], _num_lms: usize) {
     let mut end: isize = 0;
     let mut cx: u32 = 0;
 
@@ -316,7 +316,7 @@ fn assign_id_8_32(text: &[u8], sa: &mut [i32], num_lms: usize) -> usize {
     id
 }
 
-fn map_32(sa: &mut [i32], num_lms: usize) {
+fn map_32(sa: &mut [i32], _num_lms: usize) {
     let mut w = sa.len() as isize;
     let mut i = (sa.len() / 2) as isize;
     while i >= 0 {
@@ -674,7 +674,7 @@ fn induce_sub_s_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut 
     }
 }
 
-fn length_32(text: &[i32], sa: &mut [i32], num_lms: usize) {
+fn length_32(text: &[i32], sa: &mut [i32], _num_lms: usize) {
     let mut end: isize = 0;
 
     let mut c0: i32 = 0;

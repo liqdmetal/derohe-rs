@@ -79,7 +79,7 @@ impl Statement {
     /// the pointers are kept, so a re-serialize reproduces identical bytes.
     pub fn deserialize(buf: &[u8]) -> Result<(Self, usize), String> {
         let mut pos = 0usize;
-        let mut need = |buf: &[u8], pos: usize, n: usize| -> Result<(), String> {
+        let need = |buf: &[u8], pos: usize, n: usize| -> Result<(), String> {
             if buf.len() - pos < n {
                 return Err("statement: unexpected end of buffer".into());
             }

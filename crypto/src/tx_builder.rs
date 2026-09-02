@@ -57,7 +57,7 @@ pub fn build_transaction(
     rand_bytes: &[u8],
 ) -> Result<Transaction, String> {
     let sender = base_g().mul_bigint(sender_secret.into_bigint());
-    let sender_compressed = encode_compressed(&sender);
+    let _sender_compressed = encode_compressed(&sender);
 
     let mut tx = Transaction {
         version: 1,
