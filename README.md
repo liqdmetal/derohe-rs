@@ -12,7 +12,7 @@ as a black-box test oracle and never committed. See `NOTICE.md`.
 
 | Layer | Status |
 |---|---|
-| Consensus core | 2,575+ differential vectors + 71 unit tests, byte-identical vs Go |
+| Consensus core | 2,578+ differential vectors + 71 unit + 4 integration tests, byte-identical vs Go |
 | Block/chain | byte-identical replay; mainnet BLIDs reproduce 29/29; reorg 27/27 |
 | PoW | AstroBWTv3 byte-identical (90/90 live miniblocks) |
 | Smart contracts | DVM parse/run byte-identical; SC install 16/16; SC deploy via wallet |
