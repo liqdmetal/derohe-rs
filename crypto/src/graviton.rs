@@ -66,8 +66,16 @@ pub fn inner_hash(lhash: &[u8], rhash: &[u8]) -> [u8; 32] {
 /// The bit-trie node.
 #[derive(Clone, Debug)]
 pub enum Node {
-    Leaf { keyhash: [u8; 32], key: Vec<u8>, value: Vec<u8> },
-    Inner { bit: u8, left: Option<Box<Node>>, right: Option<Box<Node>> },
+    Leaf {
+        keyhash: [u8; 32],
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    Inner {
+        bit: u8,
+        left: Option<Box<Node>>,
+        right: Option<Box<Node>>,
+    },
 }
 
 impl Node {
@@ -77,7 +85,11 @@ impl Node {
                 let hval = grav_hash(value);
                 leaf_hash(keyhash, &hval)
             }
-            Node::Inner { bit: _, left, right } => {
+            Node::Inner {
+                bit: _,
+                left,
+                right,
+            } => {
                 let z = zeros_hash();
                 let lh = match left {
                     Some(l) => l.hash(),
@@ -139,11 +151,21 @@ fn inner_insert(node: &mut Node, key: &[u8], keyhash: &[u8; 32], value: &[u8]) {
     }
 }
 
-fn insert_child(child: &mut Option<Box<Node>>, bit: u8, key: &[u8], keyhash: &[u8; 32], value: &[u8]) {
+fn insert_child(
+    child: &mut Option<Box<Node>>,
+    bit: u8,
+    key: &[u8],
+    keyhash: &[u8; 32],
+    value: &[u8],
+) {
     match child {
         None => {
             // dead end: place the leaf
-            *child = Some(Box::new(Node::Leaf { keyhash: *keyhash, key: key.to_vec(), value: value.to_vec() }));
+            *child = Some(Box::new(Node::Leaf {
+                keyhash: *keyhash,
+                key: key.to_vec(),
+                value: value.to_vec(),
+            }));
         }
         Some(node) => {
             let is_leaf = matches!(node.as_ref(), Node::Leaf { .. });
@@ -162,10 +184,18 @@ fn insert_child(child: &mut Option<Box<Node>>, bit: u8, key: &[u8], keyhash: &[u
                 // split: new inner at bit+1, insert existing leaf first,
                 // then the new leaf (Go: Insert(store, tmp, n))
                 let (oldkh, oldk, oldv) = match node.as_ref() {
-                    Node::Leaf { keyhash, key, value } => (*keyhash, key.clone(), value.clone()),
+                    Node::Leaf {
+                        keyhash,
+                        key,
+                        value,
+                    } => (*keyhash, key.clone(), value.clone()),
                     _ => unreachable!(),
                 };
-                let mut tmp = Box::new(Node::Inner { bit: bit + 1, left: None, right: None });
+                let mut tmp = Box::new(Node::Inner {
+                    bit: bit + 1,
+                    left: None,
+                    right: None,
+                });
                 inner_insert(&mut tmp, &oldk, &oldkh, &oldv);
                 inner_insert(&mut tmp, key, keyhash, value);
                 *node = tmp;
@@ -180,7 +210,11 @@ fn insert_child(child: &mut Option<Box<Node>>, bit: u8, key: &[u8], keyhash: &[u
 /// Recursively fetch a value by keyhash (Go inner.Get).
 fn node_get(node: &Node, keyhash: &[u8; 32]) -> Option<Vec<u8>> {
     match node {
-        Node::Leaf { keyhash: lkh, value, .. } => {
+        Node::Leaf {
+            keyhash: lkh,
+            value,
+            ..
+        } => {
             if lkh == keyhash {
                 Some(value.clone())
             } else {
@@ -359,7 +393,11 @@ pub fn tree_keys(tree: &Tree) -> Vec<Vec<u8>> {
 impl Tree {
     pub fn new(treename: &str) -> Tree {
         Tree {
-            root: Box::new(Node::Inner { bit: 0, left: None, right: None }),
+            root: Box::new(Node::Inner {
+                bit: 0,
+                left: None,
+                right: None,
+            }),
             treename: treename.to_string(),
         }
     }

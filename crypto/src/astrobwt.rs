@@ -563,7 +563,13 @@ fn bucket_max_32(text: &[i32], freq: &mut [i32], bucket: &mut [i32], text_max: u
     }
 }
 
-fn place_lms_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut [i32], text_max: usize) -> usize {
+fn place_lms_32(
+    text: &[i32],
+    sa: &mut [i32],
+    freq: &mut [i32],
+    bucket: &mut [i32],
+    text_max: usize,
+) -> usize {
     bucket_max_32(text, freq, bucket, text_max);
 
     let mut num_lms = 0usize;
@@ -595,7 +601,13 @@ fn place_lms_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut [i3
     num_lms
 }
 
-fn induce_sub_l_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut [i32], text_max: usize) {
+fn induce_sub_l_32(
+    text: &[i32],
+    sa: &mut [i32],
+    freq: &mut [i32],
+    bucket: &mut [i32],
+    text_max: usize,
+) {
     bucket_min_32(text, freq, bucket, text_max);
 
     let mut k = text.len() as isize - 1;
@@ -636,7 +648,13 @@ fn induce_sub_l_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut 
     }
 }
 
-fn induce_sub_s_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut [i32], text_max: usize) {
+fn induce_sub_s_32(
+    text: &[i32],
+    sa: &mut [i32],
+    freq: &mut [i32],
+    bucket: &mut [i32],
+    text_max: usize,
+) {
     bucket_max_32(text, freq, bucket, text_max);
 
     let mut c_b: i32 = 0;
@@ -753,7 +771,14 @@ fn unmap_32(text: &[i32], sa: &mut [i32], num_lms: usize) {
     }
 }
 
-fn expand_32(text: &[i32], freq: &mut [i32], bucket: &mut [i32], sa: &mut [i32], num_lms: usize, text_max: usize) {
+fn expand_32(
+    text: &[i32],
+    freq: &mut [i32],
+    bucket: &mut [i32],
+    sa: &mut [i32],
+    num_lms: usize,
+    text_max: usize,
+) {
     bucket_max_32(text, freq, bucket, text_max);
 
     let mut x = num_lms as isize - 1;
@@ -780,7 +805,13 @@ fn expand_32(text: &[i32], freq: &mut [i32], bucket: &mut [i32], sa: &mut [i32],
     }
 }
 
-fn induce_l_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut [i32], text_max: usize) {
+fn induce_l_32(
+    text: &[i32],
+    sa: &mut [i32],
+    freq: &mut [i32],
+    bucket: &mut [i32],
+    text_max: usize,
+) {
     bucket_min_32(text, freq, bucket, text_max);
 
     let mut k = text.len() as isize - 1;
@@ -819,7 +850,13 @@ fn induce_l_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut [i32
     }
 }
 
-fn induce_s_32(text: &[i32], sa: &mut [i32], freq: &mut [i32], bucket: &mut [i32], text_max: usize) {
+fn induce_s_32(
+    text: &[i32],
+    sa: &mut [i32],
+    freq: &mut [i32],
+    bucket: &mut [i32],
+    text_max: usize,
+) {
     bucket_max_32(text, freq, bucket, text_max);
 
     let mut c_b: i32 = 0;

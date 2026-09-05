@@ -73,7 +73,10 @@ pub fn process_miner_transaction(
         // Go ConstructElGamal(key, base_g): zero ciphertext for this key;
         // Plus(premine) adds premine·G to Left.
         let balance = elgamal_zero(&key).plus(&be32(premine_value));
-        let nb = crate::balance_serdes::NonceBalance { nonce_height: 0, balance };
+        let nb = crate::balance_serdes::NonceBalance {
+            nonce_height: 0,
+            balance,
+        };
         balance_tree.put(miner_address, &nb.serialize());
         return;
     }
@@ -102,8 +105,7 @@ pub fn process_miner_transaction(
             continue;
         }
         let kh16 = &mbl.key_hash[..16];
-        let (key_compressed, balance_serialized) = match balance_tree
-            .get_key_value_from_hash(kh16)
+        let (key_compressed, balance_serialized) = match balance_tree.get_key_value_from_hash(kh16)
         {
             Some(v) => v,
             None => continue, // miner not registered yet — skip (matches Go)
@@ -150,7 +152,10 @@ pub fn process_transaction(
             } else if height < 144000 {
                 balance = balance.plus(&be32(200)); // early mainnet bonus
             }
-            let nb = crate::balance_serdes::NonceBalance { nonce_height: 0, balance };
+            let nb = crate::balance_serdes::NonceBalance {
+                nonce_height: 0,
+                balance,
+            };
             balance_tree.put(&tx.miner_address, &nb.serialize());
             0 // registration pays no fees
         }
@@ -161,7 +166,9 @@ pub fn process_transaction(
                 if scid_zero {
                     process_payload(balance_tree, None, payload, proof_parity, height);
                 } else {
-                    let tree: &mut Tree = changed.get_mut(&payload.scid).expect("SC tree not in cache");
+                    let tree: &mut Tree = changed
+                        .get_mut(&payload.scid)
+                        .expect("SC tree not in cache");
                     process_payload(tree, Some(balance_tree), payload, proof_parity, height);
                 }
             }
@@ -173,7 +180,8 @@ pub fn process_transaction(
 
 /// Apply one payload's ring changes (Go process_transaction inner loop).
 /// `balance_tree` is the optional fallback for SC trees (immutable here).
-fn process_payload(    tree: &mut Tree,
+fn process_payload(
+    tree: &mut Tree,
     balance_tree: Option<&Tree>,
     payload: &AssetPayload,
     parity: bool,
@@ -300,19 +308,12 @@ pub fn process_transaction_sc(
     // txid/scid = keccak(core statement). The statement's bpp comes from the
     // WIRE (wallet txs use 2, mainnet 3) — must match Go's GetHash exactly
     // or the SCID (and thus the SC_META key + the state root) diverges.
-    let bpp = tx
-        .payloads
-        .first()
-        .map(|p| p.statement.bpp())
-        .unwrap_or(3);
+    let bpp = tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(3);
     let txid = tx.get_hash(bpp);
     let scid = txid; // install: scid = txid
     let mut call_scid: Option<[u8; 32]> = None; // SC_CALL: the SC_ID
-    let incoming_value: std::collections::HashMap<[u8; 32], u64> = tx
-        .payloads
-        .iter()
-        .map(|p| (p.scid, p.burn_value))
-        .collect();
+    let incoming_value: std::collections::HashMap<[u8; 32], u64> =
+        tx.payloads.iter().map(|p| (p.scid, p.burn_value)).collect();
     // signer: first ring member of the first zero-scid payload
     let signer: [u8; 33] = tx
         .payloads
@@ -326,7 +327,10 @@ pub fn process_transaction_sc(
         })
         .unwrap_or([0u8; 33]);
 
-    use crate::sc::{execute_sc_function, process_external, read_sc, sanity_check_external_transfers, sc_code_key, sc_meta_key, wrapped_tree, TreeWrapper};
+    use crate::sc::{
+        execute_sc_function, process_external, read_sc, sanity_check_external_transfers,
+        sc_code_key, sc_meta_key, wrapped_tree, TreeWrapper,
+    };
 
     // NOTE: Go wraps the CALLER's sc_tree directly (transaction_execute.go:
     // w_sc_tree := &Tree_Wrapper{Tree: sc_tree, ...}) so meta writes land in
@@ -347,13 +351,17 @@ pub fn process_transaction_sc(
                 None => return Err("no code provided".into()),
             };
             if std::env::var("SC_DEBUG").is_ok() {
-                eprintln!("SC code len={} head={:?}", code.len(), &code[..code.len().min(80)]);
+                eprintln!(
+                    "SC code len={} head={:?}",
+                    code.len(),
+                    &code[..code.len().min(80)]
+                );
             }
             if code.is_empty() {
                 return Err("no code provided".into());
             }
-            let sc = crate::dvm::parse_smart_contract(&code)
-                .map_err(|e| format!("parse error: {e}"))?;
+            let sc =
+                crate::dvm::parse_smart_contract(&code).map_err(|e| format!("parse error: {e}"))?;
             if std::env::var("SC_DEBUG").is_ok() {
                 let ks: Vec<&String> = sc.functions.keys().collect();
                 eprintln!("SC parsed functions: {:?}", ks);
@@ -388,14 +396,30 @@ pub fn process_transaction_sc(
             // entrypoint: PRIVATE bit (0x01) is tested BITWISE like Go's
             // meta.IsPrivate() — the K0 NoSigner bit (0x80) may also be set,
             // making meta_type 0x81. `== 1` would wrongly select Initialize.
-            entrypoint = if meta_type & 0x01 == 0x01 { "InitializePrivate" } else { "Initialize" }.to_string();
+            entrypoint = if meta_type & 0x01 == 0x01 {
+                "InitializePrivate"
+            } else {
+                "Initialize"
+            }
+            .to_string();
             let (balance, sc_parsed) = read_sc(&mut w_sc_data_tree, &scid);
             let sc_parsed = sc_parsed.ok_or("SC not found")?;
             execute_sc_function(
-                &mut w_sc_tree, &mut w_sc_data_tree, &scid,
-                bl_height, bl_topoheight, bl_timestamp, blid, &txid,
-                &sc_parsed, &entrypoint, balance, &signer, &incoming_value,
-                &[], fees,
+                &mut w_sc_tree,
+                &mut w_sc_data_tree,
+                &scid,
+                bl_height,
+                bl_topoheight,
+                bl_timestamp,
+                blid,
+                &txid,
+                &sc_parsed,
+                &entrypoint,
+                balance,
+                &signer,
+                &incoming_value,
+                &[],
+                fees,
             )?;
         }
         0 => {
@@ -404,7 +428,10 @@ pub fn process_transaction_sc(
             // the SC_ID is the data-tree key for the call (the outer `scid`
             // is the txid for installs) — capture it for the cache flush
             call_scid = Some(scid);
-            let entry = tx.scdata.get_string("entrypoint").ok_or("no entrypoint provided")?;
+            let entry = tx
+                .scdata
+                .get_string("entrypoint")
+                .ok_or("no entrypoint provided")?;
             entrypoint = entry;
             // must be installed
             if w_sc_tree.get(&sc_meta_key(&scid)).is_none() {
@@ -417,10 +444,21 @@ pub fn process_transaction_sc(
             // its parameters (e.g. SetVal(x Uint64) gets x from here)
             let scdata_bytes = tx.scdata.marshal_binary().unwrap_or_default();
             execute_sc_function(
-                &mut w_sc_tree, &mut w_sc_data_tree, &scid,
-                bl_height, bl_topoheight, bl_timestamp, blid, &txid,
-                &sc_parsed, &entrypoint, balance, &signer, &incoming_value,
-                &scdata_bytes, fees,
+                &mut w_sc_tree,
+                &mut w_sc_data_tree,
+                &scid,
+                bl_height,
+                bl_topoheight,
+                bl_timestamp,
+                blid,
+                &txid,
+                &sc_parsed,
+                &entrypoint,
+                balance,
+                &signer,
+                &incoming_value,
+                &scdata_bytes,
+                fees,
             )?;
         }
         _ => return Err("unknown action".into()),
@@ -428,7 +466,14 @@ pub fn process_transaction_sc(
 
     // sanity check + commit
     sanity_check_external_transfers(&mut w_sc_data_tree, balance_tree, &scid)?;
-    process_external(cache, ss, balance_tree, &scid, &mut w_sc_data_tree, &mut w_sc_tree);
+    process_external(
+        cache,
+        ss,
+        balance_tree,
+        &scid,
+        &mut w_sc_data_tree,
+        &mut w_sc_tree,
+    );
     // CRITICAL: w_sc_data_tree wraps a CLONE of the cache's tree — its
     // STORE writes must be flushed BACK into the cache so the caller sees
     // the final SC data (the Go wrapper mutates the cache's tree in place).
@@ -471,12 +516,27 @@ pub fn add_complete_block(
     // accumulated SC data trees from prior blocks — the snapshot source so
     // SC calls can see contracts installed in earlier blocks
     prior_sc_data: &std::collections::HashMap<[u8; 32], Tree>,
-) -> Result<(u64, [u8; 32], [u8; 32], std::collections::HashMap<[u8; 32], Tree>), String> {
+) -> Result<
+    (
+        u64,
+        [u8; 32],
+        [u8; 32],
+        std::collections::HashMap<[u8; 32], Tree>,
+    ),
+    String,
+> {
     // ensure the miner is registered (zero balance) so the reward add works
-    if !genesis && balance_tree.get(&bl.miner_tx.miner_address.to_vec()).is_none() {
+    if !genesis
+        && balance_tree
+            .get(&bl.miner_tx.miner_address.to_vec())
+            .is_none()
+    {
         if let Ok(pk) = decode_compressed(&bl.miner_tx.miner_address) {
             let zb = ElGamal::new(pk, crate::hash_to_point::base_g());
-            let nb = crate::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+            let nb = crate::balance_serdes::NonceBalance {
+                nonce_height: 0,
+                balance: zb,
+            };
             balance_tree.put(&bl.miner_tx.miner_address, &nb.serialize());
         }
     }
@@ -484,9 +544,12 @@ pub fn add_complete_block(
     let mut sc_data: std::collections::HashMap<[u8; 32], Tree> = prior_sc_data.clone();
     // the snapshot must contain the PRIOR blocks' SC data trees so SC calls
     // can read variables installed earlier
-    let mut ss = crate::sc::Snapshot { trees: std::collections::HashMap::new() };
+    let mut ss = crate::sc::Snapshot {
+        trees: std::collections::HashMap::new(),
+    };
     for (scid, tree) in &sc_data {
-        ss.trees.insert(String::from_utf8_lossy(scid).to_string(), tree.clone());
+        ss.trees
+            .insert(String::from_utf8_lossy(scid).to_string(), tree.clone());
     }
     for tx in txs {
         // the changed-cache must contain the prior SC data trees so token
@@ -500,22 +563,40 @@ pub fn add_complete_block(
             let mut cache = std::collections::HashMap::new();
             let blid = bl.get_hash();
             let _ = process_transaction_sc(
-                &mut cache, &mut ss, balance_tree, sc_meta, height, height, 0,
-                &blid, tx, k0_floor,
-            ).map_err(|e| eprintln!("SC apply error: {e}"));
+                &mut cache,
+                &mut ss,
+                balance_tree,
+                sc_meta,
+                height,
+                height,
+                0,
+                &blid,
+                tx,
+                k0_floor,
+            )
+            .map_err(|e| eprintln!("SC apply error: {e}"));
             // capture the SC data trees (per-SCID: code + variables) so the
             // node can serve DERO.GetSC
             for (scid, tree) in cache {
                 if std::env::var("SC_DEBUG").is_ok() {
-                    eprintln!("block: SC cache[{:?}] {} keys", &scid[..4], crate::graviton::tree_keys(&tree).len());
+                    eprintln!(
+                        "block: SC cache[{:?}] {} keys",
+                        &scid[..4],
+                        crate::graviton::tree_keys(&tree).len()
+                    );
                 }
                 sc_data.insert(scid, tree);
             }
         }
     }
     process_miner_transaction(
-        &bl.miner_tx.miner_address, bl.miner_tx.value,
-        &bl.mini_blocks, genesis, balance_tree, fees, height,
+        &bl.miner_tx.miner_address,
+        bl.miner_tx.value,
+        &bl.mini_blocks,
+        genesis,
+        balance_tree,
+        fees,
+        height,
     );
     Ok((fees, balance_tree.hash(), sc_meta.hash(), sc_data))
 }

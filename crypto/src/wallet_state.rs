@@ -79,8 +79,7 @@ impl WalletState {
         entries.push(e);
         // keep sorted by (topoheight, transaction_pos, pos)
         entries.sort_by(|a, b| {
-            (a.topoheight, a.transaction_pos, a.pos)
-                .cmp(&(b.topoheight, b.transaction_pos, b.pos))
+            (a.topoheight, a.transaction_pos, a.pos).cmp(&(b.topoheight, b.transaction_pos, b.pos))
         });
     }
 
@@ -94,7 +93,11 @@ impl WalletState {
         min_height: u64,
         max_height: u64,
     ) -> Vec<&Entry> {
-        let max = if max_height == 0 { u64::MAX } else { max_height };
+        let max = if max_height == 0 {
+            u64::MAX
+        } else {
+            max_height
+        };
         self.entries
             .get(&scid)
             .map(|es| {
@@ -208,16 +211,14 @@ pub fn process_tx_change(
 pub fn find_our_pos(st: &crate::bulletproof::Statement, our_key: &[u8; 33]) -> Option<usize> {
     st.publickeylist
         .iter()
-        .position(|pk| {
-            crate::curve::encode_compressed(pk).as_slice() == our_key.as_slice()
-        })
+        .position(|pk| crate::curve::encode_compressed(pk).as_slice() == our_key.as_slice())
 }
 
 /// Check whether a tx touches us (we are a ring member in any payload).
 pub fn tx_touches_us(tx: &Transaction, our_key: &[u8; 33]) -> bool {
-    tx.payloads.iter().any(|p| {
-        find_our_pos(&p.statement, our_key).is_some()
-    })
+    tx.payloads
+        .iter()
+        .any(|p| find_our_pos(&p.statement, our_key).is_some())
 }
 
 /// Reconstruct a statement's publickeylist from compressed keys
@@ -240,11 +241,7 @@ mod tests {
     use ark_ec::PrimeGroup;
     use ark_ff::PrimeField;
 
-    fn make_tx(
-        sender_secret: &Fr,
-        ring_keys: &[[u8; 33]],
-        amount: u64,
-    ) -> Transaction {
+    fn make_tx(sender_secret: &Fr, ring_keys: &[[u8; 33]], amount: u64) -> Transaction {
         // build a minimal NORMAL tx whose statement has C/D committing the
         // amount at position 0 (sender) and +amount at position 1 (receiver)
         let r = Fr::from(7u64);
@@ -268,7 +265,10 @@ mod tests {
             c.push(gd + pk.mul_bigint(r.into_bigint()));
         }
         let stmt = crate::bulletproof::Statement {
-            publickeylist: ring_keys.iter().filter_map(|k| decode_compressed(k).ok()).collect(),
+            publickeylist: ring_keys
+                .iter()
+                .filter_map(|k| decode_compressed(k).ok())
+                .collect(),
             c: c.clone(),
             cln: Vec::new(),
             crn: Vec::new(),
@@ -317,7 +317,8 @@ mod tests {
 
         // sender's balance BEFORE: 1000 (encrypted to the sender key)
         let prev_bal = ElGamal::new(
-            g.mul_bigint(Fr::from(1000u64).into_bigint()) + sender_pk.mul_bigint(Fr::from(5u64).into_bigint()),
+            g.mul_bigint(Fr::from(1000u64).into_bigint())
+                + sender_pk.mul_bigint(Fr::from(5u64).into_bigint()),
             g.mul_bigint(Fr::from(5u64).into_bigint()),
         );
         let tx = make_tx(&secret, &ring, 300);
@@ -325,7 +326,8 @@ mod tests {
         // our position = 0 (sender) -> outgoing: prev - (prev - amount - fees)
         let e = process_tx_change(
             &secret, [0u8; 32], &tx, 0, 0, &prev_bal, 100, 100, 0, "blk", 0,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!e.incoming);
         assert_eq!(e.status, 1);
         assert_eq!(e.amount, 300);
@@ -338,8 +340,19 @@ mod tests {
             g.mul_bigint(Fr::from(5u64).into_bigint()),
         );
         let e2 = process_tx_change(
-            &recv_secret, [0u8; 32], &tx, 0, 1, &recv_prev, 100, 100, 0, "blk", 0,
-        ).unwrap();
+            &recv_secret,
+            [0u8; 32],
+            &tx,
+            0,
+            1,
+            &recv_prev,
+            100,
+            100,
+            0,
+            "blk",
+            0,
+        )
+        .unwrap();
         assert!(e2.incoming);
         assert_eq!(e2.amount, 300);
 
@@ -353,8 +366,19 @@ mod tests {
             g.mul_bigint(Fr::from(5u64).into_bigint()),
         );
         let e3 = process_tx_change(
-            &decoy_secret, [0u8; 32], &tx, 0, 2, &decoy_prev, 100, 100, 0, "blk", 0,
-        ).unwrap();
+            &decoy_secret,
+            [0u8; 32],
+            &tx,
+            0,
+            2,
+            &decoy_prev,
+            100,
+            100,
+            0,
+            "blk",
+            0,
+        )
+        .unwrap();
         assert!(e3.ring_member);
         assert_eq!(e3.amount, 0);
 
@@ -368,10 +392,20 @@ mod tests {
         let mut ws = WalletState::new();
         let scid = [0u8; 32];
         let mk = |h: u64| Entry {
-            height: h, topoheight: h, transaction_pos: 0, pos: 0,
-            block_hash: String::new(), txid: String::new(), timestamp_ms: 0,
-            fees: 0, amount: h, burn: 0, incoming: true, coinbase: false,
-            status: 0, ring_member: false,
+            height: h,
+            topoheight: h,
+            transaction_pos: 0,
+            pos: 0,
+            block_hash: String::new(),
+            txid: String::new(),
+            timestamp_ms: 0,
+            fees: 0,
+            amount: h,
+            burn: 0,
+            incoming: true,
+            coinbase: false,
+            status: 0,
+            ring_member: false,
         };
         ws.insert_replace(scid, mk(3));
         ws.insert_replace(scid, mk(1));
@@ -387,6 +421,4 @@ mod tests {
         let hs2: Vec<u64> = es.iter().map(|e| e.amount).collect();
         assert_eq!(hs2, vec![1, 2]);
     }
-
-
 }

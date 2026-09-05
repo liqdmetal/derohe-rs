@@ -44,9 +44,9 @@ pub struct RingMember {
 #[allow(clippy::too_many_arguments)]
 pub fn build_transaction(
     transfers: &[Transfer],
-    rings: &[Vec<RingMember>],       // per transfer: ring members (0 = self)
-    self_index: usize,               // witness_index[0] (sender position)
-    receiver_index: usize,           // witness_index[1] (receiver position)
+    rings: &[Vec<RingMember>], // per transfer: ring members (0 = self)
+    self_index: usize,         // witness_index[0] (sender position)
+    receiver_index: usize,     // witness_index[1] (receiver position)
     block_hash: &[u8; 32],
     height: u64,
     scdata: &Arguments,
@@ -213,7 +213,11 @@ pub fn build_transaction(
         // The sender balance is supplied by the caller (RingMember.balance_decoded)
         // to avoid an infeasible discrete log in the standalone wallet.
         let sender_balance = ring[0].balance_decoded;
-        let fees_this = if transfer.scid == [0u8; 32] { fees_for_asset } else { 0 };
+        let fees_this = if transfer.scid == [0u8; 32] {
+            fees_for_asset
+        } else {
+            0
+        };
         let remaining = sender_balance
             .checked_sub(value)
             .and_then(|v| v.checked_sub(fees_this))
@@ -255,7 +259,9 @@ pub fn build_transaction(
             let n = cbor.len().min(144);
             data[1..1 + n].copy_from_slice(&cbor[..n]);
             encrypt_decrypt_user_data(
-                &crate::keccak::keccak256(&[&shared[..], &encode_compressed(&receiver_pk)[..]].concat()),
+                &crate::keccak::keccak256(
+                    &[&shared[..], &encode_compressed(&receiver_pk)[..]].concat(),
+                ),
                 &mut data,
             );
             payload.rpc_type = 0; // ENCRYPTED_DEFAULT_PAYLOAD_CBOR
@@ -325,7 +331,14 @@ pub fn self_verify(tx: &Transaction) -> bool {
     for p in &tx.payloads {
         let scid_index = scid_map.get(&p.scid).copied().unwrap_or(0);
         if let Some(proof) = &p.proof {
-            if !verify(&p.scid, scid_index, &p.statement, proof, &txid, p.burn_value) {
+            if !verify(
+                &p.scid,
+                scid_index,
+                &p.statement,
+                proof,
+                &txid,
+                p.burn_value,
+            ) {
                 return false;
             }
         }

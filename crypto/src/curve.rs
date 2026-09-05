@@ -122,9 +122,21 @@ pub fn decode_compressed(b: &[u8]) -> Result<G1Projective, String> {
     let y1_smaller = bigint_to_biguint(y1.into_bigint()) * 2u32 < p_bi;
     let y = match flag {
         // 0x00: if smaller use y1 else y2
-        0x00 => if y1_smaller { y1 } else { y2 },
+        0x00 => {
+            if y1_smaller {
+                y1
+            } else {
+                y2
+            }
+        }
         // 0x01: if smaller use y2 else y1
-        0x01 => if y1_smaller { y2 } else { y1 },
+        0x01 => {
+            if y1_smaller {
+                y2
+            } else {
+                y1
+            }
+        }
         // fallthrough: return y1 regardless of flag
         _ => y1,
     };
@@ -138,11 +150,11 @@ mod tests {
     use ark_ec::PrimeGroup;
     use ark_ff::fields::AdditiveGroup;
 
-
     #[test]
     fn decode_x_ge_p() {
         // the wallet's L[1] point from the live simnode transfer
-        let pt = hex::decode("cdb52d75499c15fe868089364a86b3e2cbce099fa1ebf51d49c40338f5fd0016de").unwrap();
+        let pt = hex::decode("cdb52d75499c15fe868089364a86b3e2cbce099fa1ebf51d49c40338f5fd0016de")
+            .unwrap();
         let r = decode_compressed(&pt);
         assert!(r.is_ok(), "decode failed: {:?}", r.err());
     }
@@ -152,7 +164,8 @@ mod tests {
         // the REAL point from the wallet tx: 32-byte x ending 0x46 + flag 0x00
         // (the Go oracle accepted the tx; x >= p must decode via unreduced
         // big-int arithmetic)
-        let pt = hex::decode("43820114d657f3a06439aa73da71cecd136a9bbc19daccc1f830fd7a0a3e589460").unwrap();
+        let pt = hex::decode("43820114d657f3a06439aa73da71cecd136a9bbc19daccc1f830fd7a0a3e589460")
+            .unwrap();
         assert_eq!(pt.len(), 33);
         let xi = BigUint::from_bytes_be(&pt[..32]);
         eprintln!("xi={} bits", xi.bits());
@@ -166,8 +179,11 @@ mod tests {
     fn parse_private_sc() {
         let code = "Function InitializePrivate() Uint64\n10 STORE(\"secret\", 42)\n20 RETURN 0\nEnd Function";
         let sc = crate::dvm::parse_smart_contract(code).expect("parse");
-        assert!(sc.functions.contains_key("InitializePrivate"),
-            "InitializePrivate missing, got: {:?}", sc.functions.keys().collect::<Vec<_>>());
+        assert!(
+            sc.functions.contains_key("InitializePrivate"),
+            "InitializePrivate missing, got: {:?}",
+            sc.functions.keys().collect::<Vec<_>>()
+        );
         assert!(!sc.functions.contains_key("Initialize"));
     }
 

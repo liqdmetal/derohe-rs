@@ -9,7 +9,7 @@
 // failed with "trailing tokens" on CreateSwap).
 
 use dero_crypto::dvm::{parse_smart_contract, SmartContract};
-use dero_crypto::rpc_args::{Argument, ArgValue, Arguments, DATA_HASH, DATA_STRING, DATA_UINT64};
+use dero_crypto::rpc_args::{ArgValue, Argument, Arguments, DATA_HASH, DATA_STRING, DATA_UINT64};
 use dero_crypto::sc::{execute_sc_function, TreeWrapper};
 
 // A minimal graviton-backed tree wrapper for SC data (mirrors what the node
@@ -100,9 +100,21 @@ impl Ctx {
 
     fn call(&mut self, entrypoint: &str, args: Vec<(String, ArgValue)>, signer: &[u8; 33]) -> u64 {
         let mut a: Vec<Argument> = vec![
-            Argument { name: "SC_ACTION".into(), data_type: DATA_UINT64, value: ArgValue::U64(0) },
-            Argument { name: "SC_ID".into(), data_type: DATA_HASH, value: ArgValue::Hash(self.scid) },
-            Argument { name: "entrypoint".into(), data_type: DATA_STRING, value: ArgValue::Str(entrypoint.into()) },
+            Argument {
+                name: "SC_ACTION".into(),
+                data_type: DATA_UINT64,
+                value: ArgValue::U64(0),
+            },
+            Argument {
+                name: "SC_ID".into(),
+                data_type: DATA_HASH,
+                value: ArgValue::Hash(self.scid),
+            },
+            Argument {
+                name: "entrypoint".into(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(entrypoint.into()),
+            },
         ];
         for (k, v) in args {
             let (dt, val) = match v {
@@ -110,16 +122,32 @@ impl Ctx {
                 ArgValue::Str(s) => (DATA_STRING, ArgValue::Str(s)),
                 other => (DATA_STRING, other),
             };
-            a.push(Argument { name: k, data_type: dt, value: val });
+            a.push(Argument {
+                name: k,
+                data_type: dt,
+                value: val,
+            });
         }
         let args = Arguments(a);
         let bytes = args.marshal_binary().expect("marshal scdata");
         let incoming = std::collections::HashMap::new();
         self.txid[0] = self.txid[0].wrapping_add(1);
         match execute_sc_function(
-            &mut self.sc_meta, &mut self.data_tree, &self.scid,
-            self.bl_height, self.bl_height, self.bl_height, &self.blid, &self.txid,
-            &self.sc, entrypoint, 0, signer, &incoming, &bytes, 0,
+            &mut self.sc_meta,
+            &mut self.data_tree,
+            &self.scid,
+            self.bl_height,
+            self.bl_height,
+            self.bl_height,
+            &self.blid,
+            &self.txid,
+            &self.sc,
+            entrypoint,
+            0,
+            signer,
+            &incoming,
+            &bytes,
+            0,
         ) {
             Ok((ret, _gas)) => ret,
             // A nonzero entrypoint return is "Discarded knowingly" — the SC
@@ -136,9 +164,21 @@ impl Ctx {
         // which does NOT go through the committing execute_sc_function (that
         // requires RETURN 0 and would reject a query that returns 1).
         let mut a: Vec<Argument> = vec![
-            Argument { name: "SC_ACTION".into(), data_type: DATA_UINT64, value: ArgValue::U64(0) },
-            Argument { name: "SC_ID".into(), data_type: DATA_HASH, value: ArgValue::Hash(self.scid) },
-            Argument { name: "entrypoint".into(), data_type: DATA_STRING, value: ArgValue::Str(entrypoint.into()) },
+            Argument {
+                name: "SC_ACTION".into(),
+                data_type: DATA_UINT64,
+                value: ArgValue::U64(0),
+            },
+            Argument {
+                name: "SC_ID".into(),
+                data_type: DATA_HASH,
+                value: ArgValue::Hash(self.scid),
+            },
+            Argument {
+                name: "entrypoint".into(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(entrypoint.into()),
+            },
         ];
         for (k, v) in args {
             let (dt, val) = match v {
@@ -146,7 +186,11 @@ impl Ctx {
                 ArgValue::Str(s) => (DATA_STRING, ArgValue::Str(s)),
                 other => (DATA_STRING, other),
             };
-            a.push(Argument { name: k, data_type: dt, value: val });
+            a.push(Argument {
+                name: k,
+                data_type: dt,
+                value: val,
+            });
         }
         let scdata = Arguments(a.clone());
         let args = Arguments(a);
@@ -157,10 +201,14 @@ impl Ctx {
                 for fp in &f.params {
                     match (&fp.vtype, fp.name.as_str()) {
                         (dero_crypto::dvm::Vtype::Uint64, _) => {
-                            if let Some(v) = scdata.get_uint64(&fp.name) { p.insert(fp.name.clone(), format!("{v}")); }
+                            if let Some(v) = scdata.get_uint64(&fp.name) {
+                                p.insert(fp.name.clone(), format!("{v}"));
+                            }
                         }
                         (dero_crypto::dvm::Vtype::String, _) => {
-                            if let Some(v) = scdata.get_string(&fp.name) { p.insert(fp.name.clone(), v); }
+                            if let Some(v) = scdata.get_string(&fp.name) {
+                                p.insert(fp.name.clone(), v);
+                            }
                         }
                         _ => {}
                     }
@@ -169,7 +217,15 @@ impl Ctx {
             p
         };
         // seed a fresh state from the committed data tree, then run read-only
-        let mut state = dero_crypto::dvm::SharedState::new(&self.scid, &self.blid, &self.txid, &[0u8; 33], self.bl_height, self.bl_height, self.bl_height);
+        let mut state = dero_crypto::dvm::SharedState::new(
+            &self.scid,
+            &self.blid,
+            &self.txid,
+            &[0u8; 33],
+            self.bl_height,
+            self.bl_height,
+            self.bl_height,
+        );
         dero_crypto::sc::seed_store_from_tree(&mut state.store, &self.data_tree);
         let r = dero_crypto::dvm::run_smart_contract(&self.sc, entrypoint, &mut state, &params)
             .expect("read-only query");
@@ -205,67 +261,111 @@ fn escrow_full_lifecycle() {
     let taker = taker_signer();
 
     // 1. CreateSwap by maker -> RETURN 0 = success (STOREs commit)
-    let ret = ctx.call("CreateSwap", vec![
-        ("id".into(), ArgValue::Str("swap1".into())),
-        ("sellToken".into(), ArgValue::Str("DERO".into())),
-        ("sellAmount".into(), ArgValue::U64(1000)),
-        ("buyToken".into(), ArgValue::Str("USDT".into())),
-        ("buyAmount".into(), ArgValue::U64(500)),
-        ("maker".into(), ArgValue::Str(maker_addr())),
-        ("timeout".into(), ArgValue::U64(100)),
-    ], &maker);
+    let ret = ctx.call(
+        "CreateSwap",
+        vec![
+            ("id".into(), ArgValue::Str("swap1".into())),
+            ("sellToken".into(), ArgValue::Str("DERO".into())),
+            ("sellAmount".into(), ArgValue::U64(1000)),
+            ("buyToken".into(), ArgValue::Str("USDT".into())),
+            ("buyAmount".into(), ArgValue::U64(500)),
+            ("maker".into(), ArgValue::Str(maker_addr())),
+            ("timeout".into(), ArgValue::U64(100)),
+        ],
+        &maker,
+    );
     assert_eq!(ret, 0, "CreateSwap should succeed (RETURN 0)");
 
     // 2. GetSwap exists now (read-only query)
-    let ret = ctx.query("GetSwap", vec![("id".into(), ArgValue::Str("swap1".into()))]);
+    let ret = ctx.query(
+        "GetSwap",
+        vec![("id".into(), ArgValue::Str("swap1".into()))],
+    );
     assert_eq!(ret, 1, "GetSwap should find the swap");
 
     // 3. AcceptSwap by taker (not the maker) -> succeeds, state -> 1
-    let ret = ctx.call("AcceptSwap", vec![
-        ("id".into(), ArgValue::Str("swap1".into())),
-        ("taker".into(), ArgValue::Str("deto1qyh7q8h86...".into())),
-    ], &taker);
-    assert_eq!(ret, 0, "AcceptSwap by non-maker taker should succeed (RETURN 0)");
+    let ret = ctx.call(
+        "AcceptSwap",
+        vec![
+            ("id".into(), ArgValue::Str("swap1".into())),
+            ("taker".into(), ArgValue::Str("deto1qyh7q8h86...".into())),
+        ],
+        &taker,
+    );
+    assert_eq!(
+        ret, 0,
+        "AcceptSwap by non-maker taker should succeed (RETURN 0)"
+    );
 
     // 4. AcceptSwap AGAIN -> state already 1, so it rejects (RETURN 1)
-    let ret = ctx.call("AcceptSwap", vec![
-        ("id".into(), ArgValue::Str("swap1".into())),
-        ("taker".into(), ArgValue::Str("deto1qyh7q8h86...".into())),
-    ], &taker);
+    let ret = ctx.call(
+        "AcceptSwap",
+        vec![
+            ("id".into(), ArgValue::Str("swap1".into())),
+            ("taker".into(), ArgValue::Str("deto1qyh7q8h86...".into())),
+        ],
+        &taker,
+    );
     assert_eq!(ret, 1, "second AcceptSwap must reject (state != 0)");
 
     // 5. CancelSwap after accept: state==1 -> needs timeout to pass.
     //    At bl_height=100 with timeout=100 stored as BLOCK_HEIGHT()+timeout=200,
     //    BLOCK_HEIGHT()>200 is false -> reject (state stays 1).
-    let ret = ctx.call("CancelSwap", vec![("id".into(), ArgValue::Str("swap1".into()))], &taker);
-    assert_eq!(ret, 1, "CancelSwap before timeout on an accepted swap must reject");
+    let ret = ctx.call(
+        "CancelSwap",
+        vec![("id".into(), ArgValue::Str("swap1".into()))],
+        &taker,
+    );
+    assert_eq!(
+        ret, 1,
+        "CancelSwap before timeout on an accepted swap must reject"
+    );
 
     // 6. Fresh swap created + cancelled by the maker before accept (state 0 -> cancel path 50).
-    let ret = ctx.call("CreateSwap", vec![
-        ("id".into(), ArgValue::Str("swap2".into())),
-        ("sellToken".into(), ArgValue::Str("DERO".into())),
-        ("sellAmount".into(), ArgValue::U64(777)),
-        ("buyToken".into(), ArgValue::Str("USDT".into())),
-        ("buyAmount".into(), ArgValue::U64(333)),
-        ("maker".into(), ArgValue::Str(maker_addr())),
-        ("timeout".into(), ArgValue::U64(50)),
-    ], &maker);
+    let ret = ctx.call(
+        "CreateSwap",
+        vec![
+            ("id".into(), ArgValue::Str("swap2".into())),
+            ("sellToken".into(), ArgValue::Str("DERO".into())),
+            ("sellAmount".into(), ArgValue::U64(777)),
+            ("buyToken".into(), ArgValue::Str("USDT".into())),
+            ("buyAmount".into(), ArgValue::U64(333)),
+            ("maker".into(), ArgValue::Str(maker_addr())),
+            ("timeout".into(), ArgValue::U64(50)),
+        ],
+        &maker,
+    );
     assert_eq!(ret, 0, "CreateSwap #2 should succeed");
 
-    let ret = ctx.call("CancelSwap", vec![("id".into(), ArgValue::Str("swap2".into()))], &maker);
-    assert_eq!(ret, 0, "maker cancels own pre-accept swap -> state 3, RETURN 0");
+    let ret = ctx.call(
+        "CancelSwap",
+        vec![("id".into(), ArgValue::Str("swap2".into()))],
+        &maker,
+    );
+    assert_eq!(
+        ret, 0,
+        "maker cancels own pre-accept swap -> state 3, RETURN 0"
+    );
 
     // 7. Non-maker cannot cancel the pre-accept swap.
-    let ret = ctx.call("CreateSwap", vec![
-        ("id".into(), ArgValue::Str("swap3".into())),
-        ("sellToken".into(), ArgValue::Str("DERO".into())),
-        ("sellAmount".into(), ArgValue::U64(9)),
-        ("buyToken".into(), ArgValue::Str("BTC".into())),
-        ("buyAmount".into(), ArgValue::U64(1)),
-        ("maker".into(), ArgValue::Str(maker_addr())),
-        ("timeout".into(), ArgValue::U64(10)),
-    ], &maker);
+    let ret = ctx.call(
+        "CreateSwap",
+        vec![
+            ("id".into(), ArgValue::Str("swap3".into())),
+            ("sellToken".into(), ArgValue::Str("DERO".into())),
+            ("sellAmount".into(), ArgValue::U64(9)),
+            ("buyToken".into(), ArgValue::Str("BTC".into())),
+            ("buyAmount".into(), ArgValue::U64(1)),
+            ("maker".into(), ArgValue::Str(maker_addr())),
+            ("timeout".into(), ArgValue::U64(10)),
+        ],
+        &maker,
+    );
     assert_eq!(ret, 0);
-    let ret = ctx.call("CancelSwap", vec![("id".into(), ArgValue::Str("swap3".into()))], &taker);
+    let ret = ctx.call(
+        "CancelSwap",
+        vec![("id".into(), ArgValue::Str("swap3".into()))],
+        &taker,
+    );
     assert_eq!(ret, 1, "non-maker cannot cancel a pre-accept swap");
 }

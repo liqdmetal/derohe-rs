@@ -10,8 +10,8 @@
 //! and reduced only inside arithmetic.
 
 use ark_bn254::Fr;
-use ark_ff::{Field, PrimeField};
 use ark_ff::fields::AdditiveGroup;
+use ark_ff::{Field, PrimeField};
 
 use crate::curve::{be32_to_bigint, bigint_to_be32, N_HEX};
 use num_bigint::BigUint;
@@ -49,13 +49,18 @@ impl FieldVector {
     }
 
     pub fn from_hex(hexes: &[String]) -> Self {
-        Self(hexes.iter().map(|h| {
-            let b = hex::decode(h).expect("valid hex");
-            assert_eq!(b.len(), 32, "field element must be 32 bytes");
-            let mut a = [0u8; 32];
-            a.copy_from_slice(&b);
-            a
-        }).collect())
+        Self(
+            hexes
+                .iter()
+                .map(|h| {
+                    let b = hex::decode(h).expect("valid hex");
+                    assert_eq!(b.len(), 32, "field element must be 32 bytes");
+                    let mut a = [0u8; 32];
+                    a.copy_from_slice(&b);
+                    a
+                })
+                .collect(),
+        )
     }
 
     pub fn to_hex(&self) -> Vec<String> {
@@ -90,38 +95,74 @@ impl FieldVector {
 
     /// Sum mod n.
     pub fn sum(&self) -> Fr {
-        self.0.iter().fold(Fr::ZERO, |acc, x| acc + fr_from_be_bytes(x))
+        self.0
+            .iter()
+            .fold(Fr::ZERO, |acc, x| acc + fr_from_be_bytes(x))
     }
 
     pub fn add(&self, other: &Self) -> Self {
         assert_eq!(self.0.len(), other.0.len(), "mismatched number of elements");
-        Self(self.0.iter().zip(&other.0).map(|(a, b)| fr_to_be_bytes(fr_from_be_bytes(a) + fr_from_be_bytes(b))).collect())
+        Self(
+            self.0
+                .iter()
+                .zip(&other.0)
+                .map(|(a, b)| fr_to_be_bytes(fr_from_be_bytes(a) + fr_from_be_bytes(b)))
+                .collect(),
+        )
     }
 
     pub fn add_constant(&self, c: Fr) -> Self {
-        Self(self.0.iter().map(|a| fr_to_be_bytes(fr_from_be_bytes(a) + c)).collect())
+        Self(
+            self.0
+                .iter()
+                .map(|a| fr_to_be_bytes(fr_from_be_bytes(a) + c))
+                .collect(),
+        )
     }
 
     pub fn hadamard(&self, other: &Self) -> Self {
         assert_eq!(self.0.len(), other.0.len(), "mismatched number of elements");
-        Self(self.0.iter().zip(&other.0).map(|(a, b)| fr_to_be_bytes(fr_from_be_bytes(a) * fr_from_be_bytes(b))).collect())
+        Self(
+            self.0
+                .iter()
+                .zip(&other.0)
+                .map(|(a, b)| fr_to_be_bytes(fr_from_be_bytes(a) * fr_from_be_bytes(b)))
+                .collect(),
+        )
     }
 
     pub fn inner_product(&self, other: &Self) -> Fr {
         assert_eq!(self.0.len(), other.0.len(), "mismatched number of elements");
-        self.0.iter().zip(&other.0).fold(Fr::ZERO, |acc, (a, b)| acc + fr_from_be_bytes(a) * fr_from_be_bytes(b))
+        self.0.iter().zip(&other.0).fold(Fr::ZERO, |acc, (a, b)| {
+            acc + fr_from_be_bytes(a) * fr_from_be_bytes(b)
+        })
     }
 
     pub fn negate(&self) -> Self {
-        Self(self.0.iter().map(|a| fr_to_be_bytes(-fr_from_be_bytes(a))).collect())
+        Self(
+            self.0
+                .iter()
+                .map(|a| fr_to_be_bytes(-fr_from_be_bytes(a)))
+                .collect(),
+        )
     }
 
     pub fn times(&self, m: Fr) -> Self {
-        Self(self.0.iter().map(|a| fr_to_be_bytes(fr_from_be_bytes(a) * m)).collect())
+        Self(
+            self.0
+                .iter()
+                .map(|a| fr_to_be_bytes(fr_from_be_bytes(a) * m))
+                .collect(),
+        )
     }
 
     pub fn invert(&self) -> Self {
-        Self(self.0.iter().map(|a| fr_to_be_bytes(fr_from_be_bytes(a).inverse().unwrap())).collect())
+        Self(
+            self.0
+                .iter()
+                .map(|a| fr_to_be_bytes(fr_from_be_bytes(a).inverse().unwrap()))
+                .collect(),
+        )
     }
 
     pub fn concat(&self, other: &Self) -> Self {
@@ -133,7 +174,14 @@ impl FieldVector {
     /// Even/odd index extraction. RAW bytes.
     pub fn extract(&self, parity: bool) -> Self {
         let rem = parity as usize;
-        Self(self.0.iter().enumerate().filter(|(i, _)| i % 2 == rem).map(|(_, x)| *x).collect())
+        Self(
+            self.0
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| i % 2 == rem)
+                .map(|(_, x)| *x)
+                .collect(),
+        )
     }
 }
 

@@ -13,8 +13,8 @@
 
 use ark_bn254::G1Projective;
 use ark_ec::PrimeGroup;
-use ark_ff::PrimeField;
 use ark_ff::fields::AdditiveGroup;
+use ark_ff::PrimeField;
 
 use crate::curve::{be32_to_bigint, decode_compressed, encode_compressed};
 use crate::fieldvector::{fr_from_be_bytes, FieldVector};
@@ -61,7 +61,11 @@ fn be32(i: usize) -> [u8; 32] {
 }
 
 /// Scalar Pedersen: G^value * H^randomness.
-pub fn pedersen_commit_scalar(params: &PedersenParams, value: &[u8; 32], r: &[u8; 32]) -> G1Projective {
+pub fn pedersen_commit_scalar(
+    params: &PedersenParams,
+    value: &[u8; 32],
+    r: &[u8; 32],
+) -> G1Projective {
     let v = be32_to_bigint(value);
     let rb = be32_to_bigint(r);
     params.g.mul_bigint(v) + params.h.mul_bigint(rb)

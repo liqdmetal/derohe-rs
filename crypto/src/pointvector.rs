@@ -6,8 +6,8 @@
 
 use ark_bn254::G1Projective;
 use ark_ec::PrimeGroup;
-use ark_ff::PrimeField;
 use ark_ff::fields::AdditiveGroup;
+use ark_ff::PrimeField;
 
 use crate::fieldvector::{fr_from_be_bytes, FieldVector};
 
@@ -33,7 +33,14 @@ impl PointVector {
 
     pub fn extract(&self, parity: bool) -> Self {
         let rem = parity as usize;
-        Self(self.0.iter().enumerate().filter(|(i, _)| i % 2 == rem).map(|(_, x)| *x).collect())
+        Self(
+            self.0
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| i % 2 == rem)
+                .map(|(_, x)| *x)
+                .collect(),
+        )
     }
 
     pub fn add(&self, other: &Self) -> Self {
@@ -57,7 +64,12 @@ impl PointVector {
     }
 
     pub fn times(&self, m: ark_bn254::Fr) -> Self {
-        Self(self.0.iter().map(|p| p.mul_bigint(m.into_bigint())).collect())
+        Self(
+            self.0
+                .iter()
+                .map(|p| p.mul_bigint(m.into_bigint()))
+                .collect(),
+        )
     }
 
     pub fn concat(&self, other: &Self) -> Self {
@@ -92,11 +104,15 @@ mod tests {
     }
 
     fn fv(v: &[u64]) -> FieldVector {
-        FieldVector::new(v.iter().map(|x| {
-            let mut b = [0u8; 32];
-            b[31] = *x as u8;
-            b
-        }).collect())
+        FieldVector::new(
+            v.iter()
+                .map(|x| {
+                    let mut b = [0u8; 32];
+                    b[31] = *x as u8;
+                    b
+                })
+                .collect(),
+        )
     }
 
     #[test]

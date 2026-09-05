@@ -35,7 +35,10 @@ pub enum ArgValue {
     Hash([u8; 32]),
     Addr([u8; 33]),
     /// Unix seconds + optional sub-second (nanos). Mirrors Go time.Time.
-    Time { secs: i64, nanos: u32 },
+    Time {
+        secs: i64,
+        nanos: u32,
+    },
     /// Zero time -> CBOR null.
     TimeZero,
 }
@@ -62,19 +65,28 @@ impl Arguments {
     }
     pub fn get_uint64(&self, name: &str) -> Option<u64> {
         match self.get(name) {
-            Some(Argument { value: ArgValue::U64(v), .. }) => Some(*v),
+            Some(Argument {
+                value: ArgValue::U64(v),
+                ..
+            }) => Some(*v),
             _ => None,
         }
     }
     pub fn get_string(&self, name: &str) -> Option<String> {
         match self.get(name) {
-            Some(Argument { value: ArgValue::Str(v), .. }) => Some(v.clone()),
+            Some(Argument {
+                value: ArgValue::Str(v),
+                ..
+            }) => Some(v.clone()),
             _ => None,
         }
     }
     pub fn get_hash(&self, name: &str) -> Option<[u8; 32]> {
         match self.get(name) {
-            Some(Argument { value: ArgValue::Hash(v), .. }) => Some(*v),
+            Some(Argument {
+                value: ArgValue::Hash(v),
+                ..
+            }) => Some(*v),
             _ => None,
         }
     }
@@ -170,13 +182,13 @@ fn f32_to_f16_bits(f: f32) -> u16 {
         }
         // count leading zeros in the 23-bit mantissa
         let lz = mant.leading_zeros() as i32 - 9; // bits above bit 23
-        // value exponent = -149 + (23 - lz) = -126 - lz
-        // as f16: exponent field e16 = -126 - lz + 15 = -111 - lz
+                                                  // value exponent = -149 + (23 - lz) = -126 - lz
+                                                  // as f16: exponent field e16 = -126 - lz + 15 = -111 - lz
         e = -111 - lz;
         if e >= -14 {
             // fits as normal f16: shift mantissa left to remove leading zeros
             m <<= lz; // mantissa now has its top bit at bit 23... but f16 wants 10 bits
-            // re-enter the normal path with the same rounding
+                      // re-enter the normal path with the same rounding
             e = -111 - lz + lz; // this is getting confusing; recompute below
         }
     }
@@ -193,7 +205,7 @@ fn f32_to_f16_bits(f: f32) -> u16 {
     if e >= -14 {
         // normal f16: keep 10 mantissa bits, round-to-nearest-even at bit 13
         let rounded = m + 0x1000; // 1 << 12 (half of 1<<13)
-        // handle mantissa overflow into exponent
+                                  // handle mantissa overflow into exponent
         let carry = (rounded >> 23) & 1;
         let m10 = ((rounded >> 13) & 0x3ff) as u16;
         let e_new = e + carry as i32;
@@ -319,7 +331,8 @@ impl Arguments {
             map.retain(|(k, _)| *k != key);
             map.push((key, arg.value.clone()));
         }
-        let mut entries: Vec<(&str, &ArgValue)> = map.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        let mut entries: Vec<(&str, &ArgValue)> =
+            map.iter().map(|(k, v)| (k.as_str(), v)).collect();
         sort_keys(&mut entries);
         let mut out = head(5, entries.len() as u64);
         for (k, v) in entries {
@@ -513,7 +526,10 @@ impl Arguments {
                 DATA_TIME => match v {
                     Cbor2::Null => ArgValue::TimeZero,
                     Cbor2::Tag(1, inner) => match *inner {
-                        Cbor2::Uint(u) => ArgValue::Time { secs: u as i64, nanos: 0 },
+                        Cbor2::Uint(u) => ArgValue::Time {
+                            secs: u as i64,
+                            nanos: 0,
+                        },
                         Cbor2::Neg(i) => ArgValue::Time { secs: i, nanos: 0 },
                         Cbor2::Float(f) => {
                             let secs = f.trunc() as i64;
@@ -526,7 +542,11 @@ impl Arguments {
                 },
                 _ => return Err(format!("I don't know about type {}", dtype as char)),
             };
-            args.push(Argument { name, data_type: dtype, value });
+            args.push(Argument {
+                name,
+                data_type: dtype,
+                value,
+            });
         }
         // Go args.Sort(): by Name only
         args.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
@@ -554,12 +574,39 @@ mod tests {
     #[test]
     fn args_roundtrip() {
         let args: Arguments = Arguments(vec![
-            Argument { name: "name".into(), data_type: DATA_STRING, value: ArgValue::Str("hello".into()) },
-            Argument { name: "amt".into(), data_type: DATA_UINT64, value: ArgValue::U64(1234567890123) },
-            Argument { name: "neg".into(), data_type: DATA_INT64, value: ArgValue::I64(-42) },
-            Argument { name: "f".into(), data_type: DATA_FLOAT64, value: ArgValue::F64(1.5) },
-            Argument { name: "h".into(), data_type: DATA_HASH, value: ArgValue::Hash([9u8; 32]) },
-            Argument { name: "t".into(), data_type: DATA_TIME, value: ArgValue::Time { secs: 1700000000, nanos: 0 } },
+            Argument {
+                name: "name".into(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str("hello".into()),
+            },
+            Argument {
+                name: "amt".into(),
+                data_type: DATA_UINT64,
+                value: ArgValue::U64(1234567890123),
+            },
+            Argument {
+                name: "neg".into(),
+                data_type: DATA_INT64,
+                value: ArgValue::I64(-42),
+            },
+            Argument {
+                name: "f".into(),
+                data_type: DATA_FLOAT64,
+                value: ArgValue::F64(1.5),
+            },
+            Argument {
+                name: "h".into(),
+                data_type: DATA_HASH,
+                value: ArgValue::Hash([9u8; 32]),
+            },
+            Argument {
+                name: "t".into(),
+                data_type: DATA_TIME,
+                value: ArgValue::Time {
+                    secs: 1700000000,
+                    nanos: 0,
+                },
+            },
         ]);
         let bytes = args.marshal_binary().unwrap();
         // canonical: sorted by length then bytewise

@@ -77,9 +77,10 @@ mod tests {
         use hex::FromHex;
         let g = base_g();
         let enc = encode_compressed(&g);
-        let expect =
-            <[u8; 33]>::from_hex("02eacfbf92b94015c9b0b3d901dae37ec68f74dea7e4484c76d505aade4ad7c001")
-                .unwrap();
+        let expect = <[u8; 33]>::from_hex(
+            "02eacfbf92b94015c9b0b3d901dae37ec68f74dea7e4484c76d505aade4ad7c001",
+        )
+        .unwrap();
         assert_eq!(&enc[..], &expect);
     }
 }

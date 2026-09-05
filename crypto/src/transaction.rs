@@ -78,7 +78,10 @@ impl std::fmt::Debug for Proof {
 }
 
 fn valid_type(t: u64) -> bool {
-    matches!(t, TX_PREMINE | TX_REGISTRATION | TX_COINBASE | TX_BURN | TX_NORMAL | TX_SC)
+    matches!(
+        t,
+        TX_PREMINE | TX_REGISTRATION | TX_COINBASE | TX_BURN | TX_NORMAL | TX_SC
+    )
 }
 
 fn payload_marshal_header_statement(p: &AssetPayload, bpp: u8) -> Result<Vec<u8>, String> {
@@ -108,7 +111,10 @@ impl Transaction {
         if self.tx_type == TX_PREMINE || self.tx_type == TX_SC {
             out.extend_from_slice(&uvarint_encode(self.value));
         }
-        if self.tx_type == TX_PREMINE || self.tx_type == TX_COINBASE || self.tx_type == TX_REGISTRATION {
+        if self.tx_type == TX_PREMINE
+            || self.tx_type == TX_COINBASE
+            || self.tx_type == TX_REGISTRATION
+        {
             out.extend_from_slice(&self.miner_address);
         }
         if self.tx_type == TX_REGISTRATION {
@@ -272,7 +278,11 @@ impl Transaction {
         if tx_type == TX_BURN || tx_type == TX_NORMAL || tx_type == TX_SC {
             for p in tx.payloads.iter_mut() {
                 let st_bpp = p.statement.bpp();
-                let ring = if p.statement.pointers.is_empty() { 0 } else { p.statement.pointers.len() / st_bpp as usize };
+                let ring = if p.statement.pointers.is_empty() {
+                    0
+                } else {
+                    p.statement.pointers.len() / st_bpp as usize
+                };
                 // ring must be a power of 2 for the proof length formula;
                 // simulator chains may contain bad rings — skip the proof
                 let m = if ring.is_power_of_two() && ring > 0 {
@@ -446,9 +456,18 @@ impl Transaction {
                 // STATEMENT's own bytes (Go: Bytes_per_publickey), NOT a
                 // caller-supplied constant — wallet txs use bpp=2.
                 let st_bpp = p.statement.bpp();
-                let ring = if p.statement.pointers.is_empty() { 0 } else { p.statement.pointers.len() / st_bpp as usize };
-                let m = if ring > 0 { (ring as f64).log2() as usize } else { 0 };
-                let proof = bulletproof::deserialize(&buf[pos..], m).map_err(|e| format!("proof: {e}"))?;
+                let ring = if p.statement.pointers.is_empty() {
+                    0
+                } else {
+                    p.statement.pointers.len() / st_bpp as usize
+                };
+                let m = if ring > 0 {
+                    (ring as f64).log2() as usize
+                } else {
+                    0
+                };
+                let proof =
+                    bulletproof::deserialize(&buf[pos..], m).map_err(|e| format!("proof: {e}"))?;
                 pos += bulletproof::serialized_len(&proof);
                 p.proof = Some(proof);
             }
@@ -474,7 +493,9 @@ mod tests {
     fn stmt() -> Statement {
         use ark_ff::PrimeField;
         let g = base_g();
-        let pks: Vec<_> = (0..2).map(|i| g.mul_bigint(ark_bn254::Fr::from(i + 1).into_bigint())).collect();
+        let pks: Vec<_> = (0..2)
+            .map(|i| g.mul_bigint(ark_bn254::Fr::from(i + 1).into_bigint()))
+            .collect();
         Statement {
             publickeylist: pks.clone(),
             c: pks.clone(),

@@ -32,7 +32,10 @@ pub fn read_frame(r: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     r.read_exact(&mut len_buf)?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len == 0 || len > 64 * 1024 * 1024 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad frame length"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "bad frame length",
+        ));
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
@@ -187,8 +190,14 @@ fn decode_value(buf: &[u8]) -> Option<serde_json::Value> {
     let (n, mut pos) = match info {
         0..=23 => (info as u64, 1usize),
         24 => (*buf.get(1)? as u64, 2),
-        25 => (u16::from_be_bytes(buf.get(1..3)?.try_into().ok()?) as u64, 3),
-        26 => (u32::from_be_bytes(buf.get(1..5)?.try_into().ok()?) as u64, 5),
+        25 => (
+            u16::from_be_bytes(buf.get(1..3)?.try_into().ok()?) as u64,
+            3,
+        ),
+        26 => (
+            u32::from_be_bytes(buf.get(1..5)?.try_into().ok()?) as u64,
+            5,
+        ),
         27 => (u64::from_be_bytes(buf.get(1..9)?.try_into().ok()?), 9),
         _ => return None,
     };

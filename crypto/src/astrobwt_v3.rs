@@ -36,13 +36,19 @@ pub struct Rc4 {
 impl Rc4 {
     pub fn new(key: &[u8]) -> Rc4 {
         debug_assert!(!key.is_empty() && key.len() <= 256);
-        let mut c = Rc4 { s: [0; 256], i: 0, j: 0 };
+        let mut c = Rc4 {
+            s: [0; 256],
+            i: 0,
+            j: 0,
+        };
         for (k, slot) in c.s.iter_mut().enumerate() {
             *slot = k as u32;
         }
         let mut j: u8 = 0;
         for i in 0..256 {
-            j = j.wrapping_add(c.s[i] as u8).wrapping_add(key[i % key.len()]);
+            j = j
+                .wrapping_add(c.s[i] as u8)
+                .wrapping_add(key[i % key.len()]);
             c.s.swap(i, j as usize);
         }
         c
@@ -162,12 +168,29 @@ fn astrobwt_v3_inner(input: &[u8], _dbg: Option<&mut [u8]>) -> ([u8; 32], Option
     let mut data = [0u8; MAX_LENGTH + 64];
 
     let mut dbg = V3Debug {
-        hash: [0; 32], sha_key, after_salsa, after_rc4, lhash, prev_lhash,
-        iter1_switch: 0, iter1_op: 0, iter1_pos1: 0, iter1_pos2: 0,
-        iter1_state: [0; 256], iter1_lhash: 0, iter1_prev: 0,
-        tries: 0, data_len: 0, final_state: [0; 256], data_prefix: [0; 64],
-        data_prefix2: [0; 64], data_prefix200: [0; 64], data_full: Vec::new(),
-        op_log: [0; 300], pos_log: [0; 300], switch_log: [0; 300],
+        hash: [0; 32],
+        sha_key,
+        after_salsa,
+        after_rc4,
+        lhash,
+        prev_lhash,
+        iter1_switch: 0,
+        iter1_op: 0,
+        iter1_pos1: 0,
+        iter1_pos2: 0,
+        iter1_state: [0; 256],
+        iter1_lhash: 0,
+        iter1_prev: 0,
+        tries: 0,
+        data_len: 0,
+        final_state: [0; 256],
+        data_prefix: [0; 64],
+        data_prefix2: [0; 64],
+        data_prefix200: [0; 64],
+        data_full: Vec::new(),
+        op_log: [0; 300],
+        pos_log: [0; 300],
+        switch_log: [0; 300],
     };
 
     loop {
@@ -197,7 +220,16 @@ fn astrobwt_v3_inner(input: &[u8], _dbg: Option<&mut [u8]>) -> ([u8; 32], Option
             dbg.switch_log[(tries - 1) as usize] = random_switcher;
         }
 
-        ops::apply_op(op, &mut step_3, pos1, pos2, &mut rc4s, tries, &mut lhash, &mut prev_lhash);
+        ops::apply_op(
+            op,
+            &mut step_3,
+            pos1,
+            pos2,
+            &mut rc4s,
+            tries,
+            &mut lhash,
+            &mut prev_lhash,
+        );
 
         let d = step_3[pos1].wrapping_sub(step_3[pos2]);
         if d < 0x10 {
@@ -232,7 +264,8 @@ fn astrobwt_v3_inner(input: &[u8], _dbg: Option<&mut [u8]>) -> ([u8; 32], Option
         }
     }
 
-    let data_len: usize = ((tries - 4) * 256 + ((((step_3[253] as u64) << 8) | step_3[254] as u64) & 0x3ff)) as usize;
+    let data_len: usize =
+        ((tries - 4) * 256 + ((((step_3[253] as u64) << 8) | step_3[254] as u64) & 0x3ff)) as usize;
     dbg.tries = tries;
     dbg.data_len = data_len;
     dbg.final_state = step_3;
@@ -274,8 +307,13 @@ mod tests {
         let mut c = Rc4::new(b"Key");
         let mut buf = [0u8; 16];
         c.xor_keystream(&mut buf);
-        assert_eq!(buf, [0xeb, 0x9f, 0x77, 0x81, 0xb7, 0x34, 0xca, 0x72,
-                         0xa7, 0x19, 0x4a, 0x28, 0x67, 0xb6, 0x42, 0x95]);
+        assert_eq!(
+            buf,
+            [
+                0xeb, 0x9f, 0x77, 0x81, 0xb7, 0x34, 0xca, 0x72, 0xa7, 0x19, 0x4a, 0x28, 0x67, 0xb6,
+                0x42, 0x95
+            ]
+        );
     }
 
     #[test]

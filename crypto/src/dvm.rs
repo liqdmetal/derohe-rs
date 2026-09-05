@@ -64,10 +64,20 @@ pub struct Variable {
 
 impl Variable {
     pub fn new_uint64(name: &str, v: u64) -> Variable {
-        Variable { name: name.into(), vtype: Vtype::Uint64, value_uint64: v, value_string: String::new() }
+        Variable {
+            name: name.into(),
+            vtype: Vtype::Uint64,
+            value_uint64: v,
+            value_string: String::new(),
+        }
     }
     pub fn new_string(name: &str, v: &str) -> Variable {
-        Variable { name: name.into(), vtype: Vtype::String, value_uint64: 0, value_string: v.into() }
+        Variable {
+            name: name.into(),
+            vtype: Vtype::String,
+            value_uint64: 0,
+            value_string: v.into(),
+        }
     }
 
     /// Go Variable.MarshalBinary: uvarint(value)‖type, or raw string‖type.
@@ -112,7 +122,12 @@ impl Variable {
                 if n <= 0 {
                     return Err("corruption in DB".into());
                 }
-                Ok(Variable { name: String::new(), vtype, value_uint64: v, value_string: String::new() })
+                Ok(Variable {
+                    name: String::new(),
+                    vtype,
+                    value_uint64: v,
+                    value_string: String::new(),
+                })
             }
             Vtype::String => Ok(Variable {
                 name: String::new(),
@@ -188,7 +203,9 @@ pub fn tokenize(src: &str) -> Vec<(u32, String)> {
             }
             c if c.is_ascii_digit() => {
                 let start = i;
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == '.' || bytes[i] == '_') {
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == '.' || bytes[i] == '_')
+                {
                     i += 1;
                 }
                 out.push((line, bytes[start..i].iter().collect()));
@@ -278,7 +295,9 @@ fn check_valid_name(name: &str) -> bool {
 /// parse_function_line. Errors recovered (returned as Err).
 pub fn parse_smart_contract(src: &str) -> Result<SmartContract, String> {
     let tokens = tokenize(src);
-    let mut sc = SmartContract { functions: HashMap::new() };
+    let mut sc = SmartContract {
+        functions: HashMap::new(),
+    };
     let mut current: Option<Function> = None;
 
     // group tokens by line (in order)
@@ -303,7 +322,9 @@ pub fn parse_smart_contract(src: &str) -> Result<SmartContract, String> {
     }
     // drop any line that was a comment
     lines.retain(|(_, toks)| {
-        !toks.iter().any(|t| t.starts_with(';') || t.starts_with("REM"))
+        !toks
+            .iter()
+            .any(|t| t.starts_with(';') || t.starts_with("REM"))
     });
 
     for (ln, line) in lines {
@@ -336,24 +357,39 @@ pub fn contract_uses_signer(sc: &SmartContract) -> bool {
     false
 }
 
-fn parse_function_line(sc: &mut SmartContract, function: &mut Option<Function>, line: &[String]) -> Result<(), String> {
+fn parse_function_line(
+    sc: &mut SmartContract,
+    function: &mut Option<Function>,
+    line: &[String],
+) -> Result<(), String> {
     let pos0 = 0;
     if function.is_none() {
         // only "Function" is legal
         if !line[pos0].eq_ignore_ascii_case("Function") {
-            return Err(format!("Expecting declaration of function  but found \"{}\"", line[0]));
+            return Err(format!(
+                "Expecting declaration of function  but found \"{}\"",
+                line[0]
+            ));
         }
         let mut pos = pos0 + 1;
         if line.len() < pos + 1 {
             return Err("function name missing".into());
         }
         if !check_valid_name(&line[pos]) {
-            return Err(format!("function name \"{}\" contains invalid characters", line[pos]));
+            return Err(format!(
+                "function name \"{}\" contains invalid characters",
+                line[pos]
+            ));
         }
         let mut f = Function {
             name: line[pos].clone(),
             params: Vec::new(),
-            return_value: Variable { name: String::new(), vtype: Vtype::Invalid, value_uint64: 0, value_string: String::new() },
+            return_value: Variable {
+                name: String::new(),
+                vtype: Vtype::Invalid,
+                value_uint64: 0,
+                value_string: String::new(),
+            },
             lines: BTreeMap::new(),
             line_numbers: Vec::new(),
             line_numbers_index: HashMap::new(),
@@ -366,7 +402,10 @@ fn parse_function_line(sc: &mut SmartContract, function: &mut Option<Function>, 
         loop {
             pos += 1;
             if line.len() < pos + 1 {
-                return Err(format!("function \"{}\" missing function parameters", f.name));
+                return Err(format!(
+                    "function \"{}\" missing function parameters",
+                    f.name
+                ));
             }
             if line[pos] == "," {
                 continue;
@@ -375,35 +414,66 @@ fn parse_function_line(sc: &mut SmartContract, function: &mut Option<Function>, 
                 break;
             }
             if line.len() < pos + 2 {
-                return Err(format!("function \"{}\" missing function parameters", f.name));
+                return Err(format!(
+                    "function \"{}\" missing function parameters",
+                    f.name
+                ));
             }
             let param_name = line[pos].clone();
             let param_type = Vtype::from_name(&line[pos + 1]);
             if !check_valid_name(&param_name) {
-                return Err(format!("function name \"{}\", variable name \"{}\" contains invalid characters", f.name, param_name));
+                return Err(format!(
+                    "function name \"{}\", variable name \"{}\" contains invalid characters",
+                    f.name, param_name
+                ));
             }
             if param_type == Vtype::Invalid {
-                return Err(format!("function name \"{}\", variable type \"{}\" is invalid", f.name, line[pos + 1]));
+                return Err(format!(
+                    "function name \"{}\", variable type \"{}\" is invalid",
+                    f.name,
+                    line[pos + 1]
+                ));
             }
-            f.params.push(Variable { name: param_name, vtype: param_type, value_uint64: 0, value_string: String::new() });
+            f.params.push(Variable {
+                name: param_name,
+                vtype: param_type,
+                value_uint64: 0,
+                value_string: String::new(),
+            });
             pos += 1;
         }
         pos += 1;
         // return value
         if line.len() < pos + 1 {
-            f.return_value = Variable { name: String::new(), vtype: Vtype::Invalid, value_uint64: 0, value_string: String::new() };
+            f.return_value = Variable {
+                name: String::new(),
+                vtype: Vtype::Invalid,
+                value_uint64: 0,
+                value_string: String::new(),
+            };
         } else {
             let rt = Vtype::from_name(&line[pos]);
             if rt == Vtype::Invalid {
-                return Err(format!("function name \"{}\", return type \"{}\" is invalid", f.name, line[pos]));
+                return Err(format!(
+                    "function name \"{}\", return type \"{}\" is invalid",
+                    f.name, line[pos]
+                ));
             }
-            f.return_value = Variable { name: String::new(), vtype: rt, value_uint64: 0, value_string: String::new() };
+            f.return_value = Variable {
+                name: String::new(),
+                vtype: rt,
+                value_uint64: 0,
+                value_string: String::new(),
+            };
         }
         *function = Some(f);
         return Ok(());
     }
 
-    if line.len() >= 2 && line[0].eq_ignore_ascii_case("End") && line[1].eq_ignore_ascii_case("Function") {
+    if line.len() >= 2
+        && line[0].eq_ignore_ascii_case("End")
+        && line[1].eq_ignore_ascii_case("Function")
+    {
         let f = function.take().unwrap();
         sc.functions.insert(f.name.clone(), f);
         return Ok(());
@@ -414,19 +484,34 @@ fn parse_function_line(sc: &mut SmartContract, function: &mut Option<Function>, 
 
     // body line: line_number must be first, ascending, unique
     let f = function.as_mut().unwrap();
-    let line_number: u64 = line[0].parse().map_err(|_| format!("Error Parsing line number \"{}\" in function  \"{}\" ", line[0], f.name))?;
+    let line_number: u64 = line[0].parse().map_err(|_| {
+        format!(
+            "Error Parsing line number \"{}\" in function  \"{}\" ",
+            line[0], f.name
+        )
+    })?;
     if line_number == 0 || line_number == u64::MAX {
-        return Err(format!("Error: line number cannot be {}  in function  \"{}\" ", line_number, f.name));
+        return Err(format!(
+            "Error: line number cannot be {}  in function  \"{}\" ",
+            line_number, f.name
+        ));
     }
     if f.lines.contains_key(&line_number) {
-        return Err(format!("Error: duplicate line number within function  \"{}\" ", f.name));
+        return Err(format!(
+            "Error: duplicate line number within function  \"{}\" ",
+            f.name
+        ));
     }
     if f.line_numbers.len() >= 1 && line_number < *f.line_numbers.last().unwrap() {
-        return Err(format!("Error: line number must be ascending within function  \"{}\" ", f.name));
+        return Err(format!(
+            "Error: line number must be ascending within function  \"{}\" ",
+            f.name
+        ));
     }
     let line_copy: Vec<String> = line[1..].to_vec();
     f.lines.insert(line_number, line_copy);
-    f.line_numbers_index.insert(line_number, f.line_numbers.len() as u64);
+    f.line_numbers_index
+        .insert(line_number, f.line_numbers.len() as u64);
     f.line_numbers.push(line_number);
     Ok(())
 }
@@ -503,7 +588,15 @@ pub struct SharedState {
 
 impl SharedState {
     /// Fresh state for SC execution (sc.go Execute_sc_function setup).
-    pub fn new(scid: &[u8; 32], blid: &[u8; 32], txid: &[u8; 32], signer: &[u8; 33], bl_height: u64, bl_topoheight: u64, bl_timestamp: u64) -> Self {
+    pub fn new(
+        scid: &[u8; 32],
+        blid: &[u8; 32],
+        txid: &[u8; 32],
+        signer: &[u8; 33],
+        bl_height: u64,
+        bl_topoheight: u64,
+        bl_timestamp: u64,
+    ) -> Self {
         let mut rnd_key_bytes = Vec::with_capacity(96);
         rnd_key_bytes.extend_from_slice(scid);
         rnd_key_bytes.extend_from_slice(blid);
@@ -512,17 +605,37 @@ impl SharedState {
         SharedState {
             scid_zero: [0; 32],
             scid_self: *scid,
-            gas_compute_used: 0, gas_compute_limit: 0, gas_compute_check: false,
-            gas_store_used: 0, gas_store_limit: 0, gas_store_check: false,
+            gas_compute_used: 0,
+            gas_compute_limit: 0,
+            gas_compute_check: false,
+            gas_store_used: 0,
+            gas_store_limit: 0,
+            gas_store_check: false,
             chain_inputs: BlockchainInput {
-                scid: *scid, blid: *blid, txid: *txid,
+                scid: *scid,
+                blid: *blid,
+                txid: *txid,
                 signer: String::from_utf8_lossy(signer).to_string(),
-                bl_height, bl_topoheight, bl_timestamp,
+                bl_height,
+                bl_topoheight,
+                bl_timestamp,
             },
-            assets: HashMap::new(), assets_transfer: HashMap::new(), ram_store: HashMap::new(),
-            monitor_recursion: 0, monitor_lines_interpreted: 0, monitor_ops: 0,
-            store: Box::new(TXStorage { scid: *scid, raw_keys: HashMap::new(), transfers: HashMap::new(), state: None }),
-            rnd: Rnd { key: rnd_key, pos: 1 },
+            assets: HashMap::new(),
+            assets_transfer: HashMap::new(),
+            ram_store: HashMap::new(),
+            monitor_recursion: 0,
+            monitor_lines_interpreted: 0,
+            monitor_ops: 0,
+            store: Box::new(TXStorage {
+                scid: *scid,
+                raw_keys: HashMap::new(),
+                transfers: HashMap::new(),
+                state: None,
+            }),
+            rnd: Rnd {
+                key: rnd_key,
+                pos: 1,
+            },
         }
     }
 
@@ -694,12 +807,19 @@ pub fn run_smart_contract(
         return Err("Invalid function name, First character must be Capital/Upper Case".into());
     }
     if state.monitor_recursion == 0 {
-        state.rnd = initialize_rnd(&state.chain_inputs.scid, &state.chain_inputs.blid, &state.chain_inputs.txid);
+        state.rnd = initialize_rnd(
+            &state.chain_inputs.scid,
+            &state.chain_inputs.blid,
+            &state.chain_inputs.txid,
+        );
         state.assets_transfer = HashMap::new();
     }
     let result = run_smart_contract_internal(sc, entry_point, state, params)?;
     if state.monitor_recursion != 0 {
-        return Err(format!("Invalid  recursion level {}", state.monitor_recursion));
+        return Err(format!(
+            "Invalid  recursion level {}",
+            state.monitor_recursion
+        ));
     }
     Ok(result)
 }
@@ -712,23 +832,60 @@ pub fn run_smart_contract_internal(
     state: &mut SharedState,
     params: &HashMap<String, String>,
 ) -> Result<Variable, String> {
-    let function_call = sc.functions.get(entry_point).cloned().ok_or_else(|| format!("function \"{}\" is not available in SC", entry_point))?;
+    let function_call = sc
+        .functions
+        .get(entry_point)
+        .cloned()
+        .ok_or_else(|| format!("function \"{}\" is not available in SC", entry_point))?;
     let mut dvm = DVMInterpreter {
         sc: sc.clone(),
         f: function_call.clone(),
         locals: HashMap::new(),
-        state: std::mem::replace(state, SharedState {
-            scid_zero: [0; 32], scid_self: [0; 32],
-            gas_compute_used: 0, gas_compute_limit: 0, gas_compute_check: false,
-            gas_store_used: 0, gas_store_limit: 0, gas_store_check: false,
-            chain_inputs: BlockchainInput { scid: [0; 32], blid: [0; 32], txid: [0; 32], signer: String::new(), bl_height: 0, bl_topoheight: 0, bl_timestamp: 0 },
-            assets: HashMap::new(), assets_transfer: HashMap::new(), ram_store: HashMap::new(),
-            monitor_recursion: 0, monitor_lines_interpreted: 0, monitor_ops: 0,
-            store: Box::new(TXStorage { scid: [0; 32], raw_keys: HashMap::new(), transfers: HashMap::new(), state: None }),
-            rnd: Rnd { key: [0; 32], pos: 1 },
-        }),
+        state: std::mem::replace(
+            state,
+            SharedState {
+                scid_zero: [0; 32],
+                scid_self: [0; 32],
+                gas_compute_used: 0,
+                gas_compute_limit: 0,
+                gas_compute_check: false,
+                gas_store_used: 0,
+                gas_store_limit: 0,
+                gas_store_check: false,
+                chain_inputs: BlockchainInput {
+                    scid: [0; 32],
+                    blid: [0; 32],
+                    txid: [0; 32],
+                    signer: String::new(),
+                    bl_height: 0,
+                    bl_topoheight: 0,
+                    bl_timestamp: 0,
+                },
+                assets: HashMap::new(),
+                assets_transfer: HashMap::new(),
+                ram_store: HashMap::new(),
+                monitor_recursion: 0,
+                monitor_lines_interpreted: 0,
+                monitor_ops: 0,
+                store: Box::new(TXStorage {
+                    scid: [0; 32],
+                    raw_keys: HashMap::new(),
+                    transfers: HashMap::new(),
+                    state: None,
+                }),
+                rnd: Rnd {
+                    key: [0; 32],
+                    pos: 1,
+                },
+            },
+        ),
         ip: 0,
-        return_value: Variable { name: String::new(), vtype: function_call.return_value.vtype, value_uint64: 0, value_string: String::new() },
+        return_value: Variable {
+            name: String::new(),
+            vtype: function_call.return_value.vtype,
+            value_uint64: 0,
+            value_string: String::new(),
+        },
         version: String::new(),
     };
     // NOTE: mem::replace moved the CALLER's real state into dvm.state and
@@ -740,11 +897,23 @@ pub fn run_smart_contract_internal(
 
     // parse parameters into locals
     for p in &function_call.params {
-        let value = params.get(&p.name).ok_or_else(|| format!("Argument \"{}\" is missing while invoking \"{}\"", p.name, entry_point))?;
-        let mut variable = Variable { name: p.name.clone(), vtype: p.vtype, value_uint64: 0, value_string: String::new() };
+        let value = params.get(&p.name).ok_or_else(|| {
+            format!(
+                "Argument \"{}\" is missing while invoking \"{}\"",
+                p.name, entry_point
+            )
+        })?;
+        let mut variable = Variable {
+            name: p.name.clone(),
+            vtype: p.vtype,
+            value_uint64: 0,
+            value_string: String::new(),
+        };
         match p.vtype {
             Vtype::Uint64 => {
-                variable.value_uint64 = value.parse().map_err(|_| format!("bad uint64 param {}", value))?;
+                variable.value_uint64 = value
+                    .parse()
+                    .map_err(|_| format!("bad uint64 param {}", value))?;
             }
             Vtype::String => variable.value_string = value.clone(),
             _ => panic!("unknown parameter type cannot have parameters"),
@@ -788,7 +957,10 @@ impl DVMInterpreter {
                 }
                 let index = if self.ip == 0 { 0 } else { index };
                 if (self.f.line_numbers.len() as u64) <= index {
-                    return Err(format!("No lines after line number ({}) in SC {} in function {}", self.ip, "", self.f.name));
+                    return Err(format!(
+                        "No lines after line number ({}) in SC {} in function {}",
+                        self.ip, "", self.f.name
+                    ));
                 }
                 next = self.f.line_numbers[index as usize];
             } else {
@@ -801,7 +973,10 @@ impl DVMInterpreter {
                 }
                 break l.clone();
             } else {
-                return Err(format!("No such line number ({}) in SC {} in function {}", self.ip, "", self.f.name));
+                return Err(format!(
+                    "No such line number ({}) in SC {} in function {}",
+                    self.ip, "", self.f.name
+                ));
             }
         };
         self.state.monitor_lines_interpreted += 1;
@@ -815,7 +990,10 @@ impl DVMInterpreter {
             self.state.consume_gas(5000);
             new_ip = 0;
             if self.state.monitor_lines_interpreted > LIMIT_INTERPRETED_LINES {
-                panic!("{} lines interpreted, reached limit {}", LIMIT_INTERPRETED_LINES, LIMIT_INTERPRETED_LINES);
+                panic!(
+                    "{} lines interpreted, reached limit {}",
+                    LIMIT_INTERPRETED_LINES, LIMIT_INTERPRETED_LINES
+                );
             }
             let cmd = line[0].to_ascii_uppercase();
             match cmd.as_str() {
@@ -848,17 +1026,27 @@ impl DVMInterpreter {
         }
         let data_type = Vtype::from_name(&line[line.len() - 1]);
         if data_type == Vtype::Invalid {
-            return Err(format!("function name \"{}\", No such Data type \"{}\"", self.f.name, line[line.len() - 1]));
+            return Err(format!(
+                "function name \"{}\", No such Data type \"{}\"",
+                self.f.name,
+                line[line.len() - 1]
+            ));
         }
         for v in &line[..line.len() - 2] {
             if v == "," {
                 continue;
             }
             if !check_valid_name(v) {
-                return Err(format!("function name \"{}\", variable name \"{}\" contains invalid characters", self.f.name, v));
+                return Err(format!(
+                    "function name \"{}\", variable name \"{}\" contains invalid characters",
+                    self.f.name, v
+                ));
             }
             if self.locals.contains_key(v) {
-                return Err(format!("function name \"{}\", variable name \"{}\" contains invalid characters", self.f.name, v));
+                return Err(format!(
+                    "function name \"{}\", variable name \"{}\" contains invalid characters",
+                    self.f.name, v
+                ));
             }
             let var = match data_type {
                 Vtype::Uint64 => Variable::new_uint64(v, 0),
@@ -875,7 +1063,10 @@ impl DVMInterpreter {
             return Err("Invalid LET syntax".into());
         }
         if !self.locals.contains_key(&line[0]) {
-            return Err(format!("function name \"{}\", variable name \"{}\"  is used without definition", self.f.name, line[0]));
+            return Err(format!(
+                "function name \"{}\", variable name \"{}\"  is used without definition",
+                self.f.name, line[0]
+            ));
         }
         let result_type = self.locals[&line[0]].vtype;
         let expr = self.parse_expr(&line[2..].join(" "))?;
@@ -889,7 +1080,15 @@ impl DVMInterpreter {
                 let v = expr_value.as_string().ok_or("type mismatch")?;
                 self.locals.get_mut(&line[0]).unwrap().value_string = v;
             }
-            _ => return Err(format!("LET: unhandled data_type {:?}", self.locals.get(&line[0]).map(|v| v.vtype).unwrap_or(Vtype::Invalid))),
+            _ => {
+                return Err(format!(
+                    "LET: unhandled data_type {:?}",
+                    self.locals
+                        .get(&line[0])
+                        .map(|v| v.vtype)
+                        .unwrap_or(Vtype::Invalid)
+                ))
+            }
         }
         Ok(())
     }
@@ -909,8 +1108,13 @@ impl DVMInterpreter {
         let mut thenip: u64 = 0;
         let mut elseip: u64 = 0;
         let mut expr_line: &[String] = line;
-        if line.len() >= 4 && line[line.len() - 3].eq_ignore_ascii_case("THEN") && line[line.len() - 2].eq_ignore_ascii_case("GOTO") {
-            thenip = line[line.len() - 1].parse().map_err(|_| "bad then".to_string())?;
+        if line.len() >= 4
+            && line[line.len() - 3].eq_ignore_ascii_case("THEN")
+            && line[line.len() - 2].eq_ignore_ascii_case("GOTO")
+        {
+            thenip = line[line.len() - 1]
+                .parse()
+                .map_err(|_| "bad then".to_string())?;
             expr_line = &line[..line.len() - 3];
         } else if line.len() >= 7
             && line[line.len() - 6].eq_ignore_ascii_case("THEN")
@@ -918,8 +1122,12 @@ impl DVMInterpreter {
             && line[line.len() - 3].eq_ignore_ascii_case("ELSE")
             && line[line.len() - 2].eq_ignore_ascii_case("GOTO")
         {
-            thenip = line[line.len() - 4].parse().map_err(|_| "bad then".to_string())?;
-            elseip = line[line.len() - 1].parse().map_err(|_| "bad else".to_string())?;
+            thenip = line[line.len() - 4]
+                .parse()
+                .map_err(|_| "bad then".to_string())?;
+            elseip = line[line.len() - 1]
+                .parse()
+                .map_err(|_| "bad else".to_string())?;
             if elseip == 0 || elseip == u64::MAX {
                 return Err(format!("ELSE GOTO  has invalid line number \"{}\"", thenip));
             }
@@ -934,14 +1142,20 @@ impl DVMInterpreter {
         let expr_value = self.eval(&expr)?;
         match expr_value {
             ExprValue::Uint64(v) => Ok(if v != 0 { thenip } else { elseip }),
-            _ => Err(format!("Invalid IF expression  \"{}\"", expr_line.join(" "))),
+            _ => Err(format!(
+                "Invalid IF expression  \"{}\"",
+                expr_line.join(" ")
+            )),
         }
     }
 
     fn interpret_return(&mut self, line: &[String]) -> Result<(), String> {
         if self.return_value.vtype == Vtype::Invalid {
             if !line.is_empty() {
-                return Err(format!("function name \"{}\" cannot return anything", self.f.name));
+                return Err(format!(
+                    "function name \"{}\" cannot return anything",
+                    self.f.name
+                ));
             }
             self.state.monitor_recursion -= 1;
             // newIP = MaxUint64 handled by caller via return value marker
@@ -950,7 +1164,10 @@ impl DVMInterpreter {
             return Ok(());
         }
         if line.is_empty() {
-            return Err(format!("function name \"{}\" should return  a value", self.f.name));
+            return Err(format!(
+                "function name \"{}\" should return  a value",
+                self.f.name
+            ));
         }
         let expr = self.parse_expr(&line.join(" "))?;
         let expr_value = self.eval(&expr)?;
@@ -1020,8 +1237,20 @@ impl ExprValue {
     }
     fn is_zero(&self) -> u64 {
         match self {
-            ExprValue::Uint64(v) => if *v == 0 { 1 } else { 0 },
-            ExprValue::String(v) => if v.is_empty() { 1 } else { 0 },
+            ExprValue::Uint64(v) => {
+                if *v == 0 {
+                    1
+                } else {
+                    0
+                }
+            }
+            ExprValue::String(v) => {
+                if v.is_empty() {
+                    1
+                } else {
+                    0
+                }
+            }
         }
     }
 }
@@ -1049,7 +1278,10 @@ impl DVMInterpreter {
         // here on the execution path we merge them so the parser recognizes
         // the real operator tokens.
         let merged = merge_operator_tokens(toks);
-        let mut p = ExprParser { toks: &merged, pos: 0 };
+        let mut p = ExprParser {
+            toks: &merged,
+            pos: 0,
+        };
         let e = p.parse_expr()?;
         if p.pos < merged.len() {
             return Err(format!("trailing tokens"));
@@ -1126,8 +1358,8 @@ impl<'a> ExprParser<'a> {
                 Some("-") => Some('-'),
                 Some("|") => Some('|'),
                 Some("^") => Some('^'),
-                Some(">>") => Some('r'),  // SHR (shift-right); '>' is GTR in parse_cmp
-                Some("<<") => Some('l'),  // SHL (shift-left); '<' is LSS in parse_cmp
+                Some(">>") => Some('r'), // SHR (shift-right); '>' is GTR in parse_cmp
+                Some("<<") => Some('l'), // SHL (shift-left); '<' is LSS in parse_cmp
                 _ => None,
             };
             match op {
@@ -1272,14 +1504,20 @@ impl DVMInterpreter {
     pub fn eval(&mut self, expr: &Expr) -> Result<ExprValue, String> {
         self.state.monitor_ops += 1;
         if self.state.monitor_ops > LIMIT_EVALS {
-            panic!("{} lines interpreted, evals reached limit {}", self.state.monitor_lines_interpreted, LIMIT_EVALS);
+            panic!(
+                "{} lines interpreted, evals reached limit {}",
+                self.state.monitor_lines_interpreted, LIMIT_EVALS
+            );
         }
         match expr {
             Expr::Int(v) => Ok(ExprValue::Uint64(*v)),
             Expr::Str(s) => Ok(ExprValue::String(s.clone())),
             Expr::Ident(name) => {
                 if !self.locals.contains_key(name) {
-                    panic!("function name \"{}\", variable name \"{}\"  is used without definition", self.f.name, name);
+                    panic!(
+                        "function name \"{}\", variable name \"{}\"  is used without definition",
+                        self.f.name, name
+                    );
                 }
                 let v = &self.locals[name];
                 match v.vtype {
@@ -1295,7 +1533,9 @@ impl DVMInterpreter {
                     '~' => Ok(ExprValue::Uint64(!x.as_uint64().ok_or("type mismatch")?)),
                     '!' => match x {
                         ExprValue::Uint64(v) => Ok(ExprValue::Uint64(!v)),
-                        ExprValue::String(v) => Ok(ExprValue::Uint64(if v.is_empty() { 1 } else { 0 })),
+                        ExprValue::String(v) => {
+                            Ok(ExprValue::Uint64(if v.is_empty() { 1 } else { 0 }))
+                        }
                     },
                     _ => Err("bad unary".into()),
                 }
@@ -1310,7 +1550,12 @@ impl DVMInterpreter {
         }
     }
 
-    fn eval_binary(&mut self, op: char, left: ExprValue, right: ExprValue) -> Result<ExprValue, String> {
+    fn eval_binary(
+        &mut self,
+        op: char,
+        left: ExprValue,
+        right: ExprValue,
+    ) -> Result<ExprValue, String> {
         // string + uint64 auto-concat
         if let (ExprValue::String(l), ExprValue::Uint64(r)) = (&left, &right) {
             if op == '+' {
@@ -1351,7 +1596,10 @@ impl DVMInterpreter {
                 }
                 '=' => Ok(ExprValue::Uint64(if l == r { 1 } else { 0 })),
                 '!' => Ok(ExprValue::Uint64(if l != r { 1 } else { 0 })),
-                _ => Err(format!("String data type only support addition operation ('{}') not supported", op)),
+                _ => Err(format!(
+                    "String data type only support addition operation ('{}') not supported",
+                    op
+                )),
             },
             (ExprValue::Uint64(l), ExprValue::Uint64(r)) => Ok(ExprValue::Uint64(match op {
                 '+' => l.wrapping_add(r),
@@ -1362,14 +1610,50 @@ impl DVMInterpreter {
                 '&' => l & r,
                 '|' => l | r,
                 '^' => l ^ r,
-                '<' => if l < r { 1 } else { 0 },   // LSS (less-than); Go token.LSS
-                '>' => if l > r { 1 } else { 0 },   // GTR (greater-than); Go token.GTR
-                'l' => l << r,                       // SHL; parse_add maps "<<" here
-                'r' => l >> r,                       // SHR; parse_add maps ">>" here
-                '=' => if l == r { 1 } else { 0 },
-                '!' => if l != r { 1 } else { 0 },
-                '{' => if l <= r { 1 } else { 0 },
-                '}' => if l >= r { 1 } else { 0 },
+                '<' => {
+                    if l < r {
+                        1
+                    } else {
+                        0
+                    }
+                } // LSS (less-than); Go token.LSS
+                '>' => {
+                    if l > r {
+                        1
+                    } else {
+                        0
+                    }
+                } // GTR (greater-than); Go token.GTR
+                'l' => l << r, // SHL; parse_add maps "<<" here
+                'r' => l >> r, // SHR; parse_add maps ">>" here
+                '=' => {
+                    if l == r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                '!' => {
+                    if l != r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                '{' => {
+                    if l <= r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                '}' => {
+                    if l >= r {
+                        1
+                    } else {
+                        0
+                    }
+                }
                 _ => return Err("This operation cannot be handled".into()),
             })),
             _ => Err("type mismatch".into()),
@@ -1398,7 +1682,10 @@ impl DVMInterpreter {
             let v = self.eval(&args[i])?;
             match p.vtype {
                 Vtype::Uint64 => {
-                    arguments.insert(p.name.clone(), format!("{}", v.as_uint64().ok_or("type mismatch")?));
+                    arguments.insert(
+                        p.name.clone(),
+                        format!("{}", v.as_uint64().ok_or("type mismatch")?),
+                    );
                 }
                 Vtype::String => {
                     arguments.insert(p.name.clone(), v.as_string().ok_or("type mismatch")?);
@@ -1414,25 +1701,50 @@ impl DVMInterpreter {
         }
     }
 
-    fn run_smart_contract_internal(&mut self, entry_point: &str, params: &HashMap<String, String>) -> Result<Variable, String> {
+    fn run_smart_contract_internal(
+        &mut self,
+        entry_point: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<Variable, String> {
         let function_call = match self.sc.functions.get(entry_point) {
             Some(f) => f.clone(),
-            None => return Err(format!("function \"{}\" is not available in SC", entry_point)),
+            None => {
+                return Err(format!(
+                    "function \"{}\" is not available in SC",
+                    entry_point
+                ))
+            }
         };
         // save interpreter state, run a fresh one
         let saved = std::mem::replace(&mut self.f, function_call.clone());
         let saved_locals = std::mem::replace(&mut self.locals, HashMap::new());
         let saved_ret = std::mem::replace(
             &mut self.return_value,
-            Variable { name: String::new(), vtype: function_call.return_value.vtype, value_uint64: 0, value_string: String::new() },
+            Variable {
+                name: String::new(),
+                vtype: function_call.return_value.vtype,
+                value_uint64: 0,
+                value_string: String::new(),
+            },
         );
         // parse params into locals
         for p in &function_call.params {
-            let value = params.get(&p.name).ok_or_else(|| format!("Argument \"{}\" is missing while invoking \"{}\"", p.name, entry_point))?;
-            let mut variable = Variable { name: p.name.clone(), vtype: p.vtype, value_uint64: 0, value_string: String::new() };
+            let value = params.get(&p.name).ok_or_else(|| {
+                format!(
+                    "Argument \"{}\" is missing while invoking \"{}\"",
+                    p.name, entry_point
+                )
+            })?;
+            let mut variable = Variable {
+                name: p.name.clone(),
+                vtype: p.vtype,
+                value_uint64: 0,
+                value_string: String::new(),
+            };
             match p.vtype {
                 Vtype::Uint64 => {
-                    variable.value_uint64 = parse_uint(value).map_err(|_| format!("bad uint64 param {}", value))?;
+                    variable.value_uint64 =
+                        parse_uint(value).map_err(|_| format!("bad uint64 param {}", value))?;
                 }
                 Vtype::String => variable.value_string = value.clone(),
                 _ => panic!("unknown parameter type cannot have parameters"),
@@ -1451,48 +1763,53 @@ impl DVMInterpreter {
     }
 
     // The builtin function table — dvm_functions.go. Costs are the reference's.
-    fn handle_internal_function(&mut self, name: &str, args: &[Expr]) -> Result<Option<ExprValue>, String> {
+    fn handle_internal_function(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ExprValue>, String> {
         let lower = name.to_ascii_lowercase();
-        let (compute_cost, handler): (i64, fn(&mut Self, &[Expr]) -> Result<ExprValue, String>) = match lower.as_str() {
-            "version" => (1000, builtin_version),
-            "load" => (5000, builtin_load),
-            "exists" => (5000, builtin_exists),
-            "store" => (10000, builtin_store),
-            "delete" => (3000, builtin_delete),
-            "mapexists" => (1000, builtin_mapexists),
-            "mapget" => (1000, builtin_mapget),
-            "mapstore" => (1000, builtin_mapstore),
-            "mapdelete" => (1000, builtin_mapdelete),
-            "random" => (2500, builtin_random),
-            "scid" => (2000, builtin_scid),
-            "blid" => (2000, builtin_blid),
-            "txid" => (2000, builtin_txid),
-            "dero" => (10000, builtin_dero),
-            "block_height" => (2000, builtin_block_height),
-            "block_timestamp" => (2500, builtin_block_timestamp),
-            "signer" => (5000, builtin_signer),
-            "update_sc_code" => (5000, builtin_update_sc_code),
-            "is_address_valid" => (50000, builtin_is_address_valid),
-            "address_raw" => (60000, builtin_address_raw),
-            "address_string" => (50000, builtin_address_string),
-            "send_dero_to_address" => (70000, builtin_send_dero_to_address),
-            "send_asset_to_address" => (90000, builtin_send_asset_to_address),
-            "derovalue" => (10000, builtin_derovalue),
-            "assetvalue" => (10000, builtin_assetvalue),
-            "atoi" => (5000, builtin_atoi),
-            "itoa" => (5000, builtin_itoa),
-            "sha256" => (25000, builtin_sha256),
-            "sha3256" => (25000, builtin_sha3256),
-            "keccak256" => (25000, builtin_keccak256),
-            "hex" => (10000, builtin_hex),
-            "hexdecode" => (10000, builtin_hexdecode),
-            "min" => (5000, builtin_min),
-            "max" => (5000, builtin_max),
-            "strlen" => (20000, builtin_strlen),
-            "substr" => (20000, builtin_substr),
-            "panic" => (10000, builtin_panic),
-            _ => return Ok(None),
-        };
+        let (compute_cost, handler): (i64, fn(&mut Self, &[Expr]) -> Result<ExprValue, String>) =
+            match lower.as_str() {
+                "version" => (1000, builtin_version),
+                "load" => (5000, builtin_load),
+                "exists" => (5000, builtin_exists),
+                "store" => (10000, builtin_store),
+                "delete" => (3000, builtin_delete),
+                "mapexists" => (1000, builtin_mapexists),
+                "mapget" => (1000, builtin_mapget),
+                "mapstore" => (1000, builtin_mapstore),
+                "mapdelete" => (1000, builtin_mapdelete),
+                "random" => (2500, builtin_random),
+                "scid" => (2000, builtin_scid),
+                "blid" => (2000, builtin_blid),
+                "txid" => (2000, builtin_txid),
+                "dero" => (10000, builtin_dero),
+                "block_height" => (2000, builtin_block_height),
+                "block_timestamp" => (2500, builtin_block_timestamp),
+                "signer" => (5000, builtin_signer),
+                "update_sc_code" => (5000, builtin_update_sc_code),
+                "is_address_valid" => (50000, builtin_is_address_valid),
+                "address_raw" => (60000, builtin_address_raw),
+                "address_string" => (50000, builtin_address_string),
+                "send_dero_to_address" => (70000, builtin_send_dero_to_address),
+                "send_asset_to_address" => (90000, builtin_send_asset_to_address),
+                "derovalue" => (10000, builtin_derovalue),
+                "assetvalue" => (10000, builtin_assetvalue),
+                "atoi" => (5000, builtin_atoi),
+                "itoa" => (5000, builtin_itoa),
+                "sha256" => (25000, builtin_sha256),
+                "sha3256" => (25000, builtin_sha3256),
+                "keccak256" => (25000, builtin_keccak256),
+                "hex" => (10000, builtin_hex),
+                "hexdecode" => (10000, builtin_hexdecode),
+                "min" => (5000, builtin_min),
+                "max" => (5000, builtin_max),
+                "strlen" => (20000, builtin_strlen),
+                "substr" => (20000, builtin_substr),
+                "panic" => (10000, builtin_panic),
+                _ => return Ok(None),
+            };
         self.state.consume_gas(compute_cost);
         let result = handler(self, args)?;
         Ok(Some(result))
@@ -1523,7 +1840,11 @@ fn builtin_load(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, St
     checkargscount(1, args.len());
     let key = dvm.eval(&args[0])?;
     let keyv = convert_to_variable(key);
-    let dkey = DataKey { scid: dvm.state.chain_inputs.scid, balance: false, key: keyv };
+    let dkey = DataKey {
+        scid: dvm.state.chain_inputs.scid,
+        balance: false,
+        key: keyv,
+    };
     let mut found = 0u64;
     let result = dvm.state.store.load(&dkey, &mut found);
     if found == 0 {
@@ -1542,7 +1863,11 @@ fn builtin_exists(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, 
     checkargscount(1, args.len());
     let key = dvm.eval(&args[0])?;
     let keyv = convert_to_variable(key);
-    let dkey = DataKey { scid: dvm.state.chain_inputs.scid, balance: false, key: keyv };
+    let dkey = DataKey {
+        scid: dvm.state.chain_inputs.scid,
+        balance: false,
+        key: keyv,
+    };
     let mut found = 0u64;
     dvm.state.store.load(&dkey, &mut found);
     Ok(ExprValue::Uint64(found))
@@ -1552,7 +1877,11 @@ fn builtin_store(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, S
     checkargscount(2, args.len());
     let key = convert_to_variable(dvm.eval(&args[0])?);
     let value = convert_to_variable(dvm.eval(&args[1])?);
-    let dkey = DataKey { scid: dvm.state.chain_inputs.scid, balance: false, key };
+    let dkey = DataKey {
+        scid: dvm.state.chain_inputs.scid,
+        balance: false,
+        key,
+    };
     dvm.state.store.store(&dkey, &value);
     Ok(ExprValue::Uint64(1))
 }
@@ -1560,7 +1889,11 @@ fn builtin_store(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, S
 fn builtin_delete(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(1, args.len());
     let key = convert_to_variable(dvm.eval(&args[0])?);
-    let dkey = DataKey { scid: dvm.state.chain_inputs.scid, balance: false, key };
+    let dkey = DataKey {
+        scid: dvm.state.chain_inputs.scid,
+        balance: false,
+        key,
+    };
     dvm.state.store.delete(&dkey);
     Ok(ExprValue::Uint64(1))
 }
@@ -1568,13 +1901,24 @@ fn builtin_delete(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, 
 fn builtin_mapexists(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(1, args.len());
     let key = convert_to_variable(dvm.eval(&args[0])?);
-    Ok(ExprValue::Uint64(if dvm.state.ram_store.contains_key(&key) { 1 } else { 0 }))
+    Ok(ExprValue::Uint64(
+        if dvm.state.ram_store.contains_key(&key) {
+            1
+        } else {
+            0
+        },
+    ))
 }
 
 fn builtin_mapget(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(1, args.len());
     let key = convert_to_variable(dvm.eval(&args[0])?);
-    let v = dvm.state.ram_store.get(&key).cloned().ok_or("This variable cannot be obtained")?;
+    let v = dvm
+        .state
+        .ram_store
+        .get(&key)
+        .cloned()
+        .ok_or("This variable cannot be obtained")?;
     Ok(match v.vtype {
         Vtype::Uint64 => ExprValue::Uint64(v.value_uint64),
         Vtype::String => ExprValue::String(v.value_string),
@@ -1613,22 +1957,30 @@ fn builtin_random(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, 
 
 fn builtin_scid(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(0, args.len());
-    Ok(ExprValue::String(String::from_utf8_lossy(&dvm.state.chain_inputs.scid).into_owned()))
+    Ok(ExprValue::String(
+        String::from_utf8_lossy(&dvm.state.chain_inputs.scid).into_owned(),
+    ))
 }
 
 fn builtin_blid(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(0, args.len());
-    Ok(ExprValue::String(String::from_utf8_lossy(&dvm.state.chain_inputs.blid).into_owned()))
+    Ok(ExprValue::String(
+        String::from_utf8_lossy(&dvm.state.chain_inputs.blid).into_owned(),
+    ))
 }
 
 fn builtin_txid(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(0, args.len());
-    Ok(ExprValue::String(String::from_utf8_lossy(&dvm.state.chain_inputs.txid).into_owned()))
+    Ok(ExprValue::String(
+        String::from_utf8_lossy(&dvm.state.chain_inputs.txid).into_owned(),
+    ))
 }
 
 fn builtin_dero(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(0, args.len());
-    Ok(ExprValue::String(String::from_utf8_lossy(&dvm.state.scid_zero).into_owned()))
+    Ok(ExprValue::String(
+        String::from_utf8_lossy(&dvm.state.scid_zero).into_owned(),
+    ))
 }
 
 fn builtin_block_height(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
@@ -1651,7 +2003,11 @@ fn builtin_update_sc_code(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<Exp
     let code = dvm.eval(&args[0])?;
     match code {
         ExprValue::String(s) => {
-            let dkey = DataKey { scid: [0; 32], balance: false, key: Variable::new_string("", "C") };
+            let dkey = DataKey {
+                scid: [0; 32],
+                balance: false,
+                key: Variable::new_string("", "C"),
+            };
             dvm.state.store.store(&dkey, &Variable::new_string("", &s));
             Ok(ExprValue::Uint64(1))
         }
@@ -1709,13 +2065,22 @@ fn builtin_address_string(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<Exp
     }
 }
 
-fn builtin_send_dero_to_address(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
+fn builtin_send_dero_to_address(
+    dvm: &mut DVMInterpreter,
+    args: &[Expr],
+) -> Result<ExprValue, String> {
     checkargscount(2, args.len());
     let addr = dvm.eval(&args[0])?;
     let amount = dvm.eval(&args[1])?;
-    let addr_s = addr.as_string().ok_or("address must be valid DERO network address")?;
+    let addr_s = addr
+        .as_string()
+        .ok_or("address must be valid DERO network address")?;
     if std::env::var("SC_DEBUG").is_ok() {
-        eprintln!("SEND_DERO addr len={} hex={:?}", addr_s.len(), hex::encode(addr_s.as_bytes()));
+        eprintln!(
+            "SEND_DERO addr len={} hex={:?}",
+            addr_s.len(),
+            hex::encode(addr_s.as_bytes())
+        );
     }
     // Go: DecodeCompressed([]byte(addr)) — a 33-byte compressed point
     if !(addr_s.len() == 33 && crate::curve::decode_compressed(addr_s.as_bytes()).is_ok()) {
@@ -1725,16 +2090,23 @@ fn builtin_send_dero_to_address(dvm: &mut DVMInterpreter, args: &[Expr]) -> Resu
     if amount == 0 {
         return Ok(ExprValue::Uint64(amount));
     }
-    dvm.state.store.send_external(dvm.state.chain_inputs.scid, [0; 32], addr_s, amount);
+    dvm.state
+        .store
+        .send_external(dvm.state.chain_inputs.scid, [0; 32], addr_s, amount);
     Ok(ExprValue::Uint64(amount))
 }
 
-fn builtin_send_asset_to_address(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
+fn builtin_send_asset_to_address(
+    dvm: &mut DVMInterpreter,
+    args: &[Expr],
+) -> Result<ExprValue, String> {
     checkargscount(3, args.len());
     let addr = dvm.eval(&args[0])?;
     let amount = dvm.eval(&args[1])?;
     let asset = dvm.eval(&args[2])?;
-    let addr_s = addr.as_string().ok_or("address must be valid DERO network address")?;
+    let addr_s = addr
+        .as_string()
+        .ok_or("address must be valid DERO network address")?;
     if !(addr_s.len() == 33 && crate::curve::decode_compressed(addr_s.as_bytes()).is_ok()) {
         panic!("address must be valid DERO network address");
     }
@@ -1748,7 +2120,9 @@ fn builtin_send_asset_to_address(dvm: &mut DVMInterpreter, args: &[Expr]) -> Res
     }
     let mut asset_bytes = [0u8; 32];
     asset_bytes.copy_from_slice(asset_s.as_bytes());
-    dvm.state.store.send_external(dvm.state.chain_inputs.scid, asset_bytes, addr_s, amount);
+    dvm.state
+        .store
+        .send_external(dvm.state.chain_inputs.scid, asset_bytes, addr_s, amount);
     Ok(ExprValue::Uint64(amount))
 }
 
@@ -1767,13 +2141,18 @@ fn builtin_assetvalue(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprVal
     }
     let mut asset_bytes = [0u8; 32];
     asset_bytes.copy_from_slice(asset_s.as_bytes());
-    Ok(ExprValue::Uint64(*dvm.state.assets.get(&asset_bytes).unwrap_or(&0)))
+    Ok(ExprValue::Uint64(
+        *dvm.state.assets.get(&asset_bytes).unwrap_or(&0),
+    ))
 }
 
 fn builtin_itoa(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(1, args.len());
     let v = dvm.eval(&args[0])?;
-    Ok(ExprValue::String(format!("{}", v.as_uint64().ok_or("itoa argument must be valid uint64")?)))
+    Ok(ExprValue::String(format!(
+        "{}",
+        v.as_uint64().ok_or("itoa argument must be valid uint64")?
+    )))
 }
 
 fn builtin_atoi(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
@@ -1787,7 +2166,11 @@ fn builtin_atoi(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, St
 fn builtin_strlen(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(1, args.len());
     let v = dvm.eval(&args[0])?;
-    Ok(ExprValue::Uint64(v.as_string().ok_or("strlen argument must be valid string")?.len() as u64))
+    Ok(ExprValue::Uint64(
+        v.as_string()
+            .ok_or("strlen argument must be valid string")?
+            .len() as u64,
+    ))
 }
 
 /// Build a Rust String that holds raw (possibly non-UTF-8) bytes, matching
@@ -1839,23 +2222,44 @@ fn builtin_hexdecode(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValu
 
 fn builtin_min(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(2, args.len());
-    let a1 = dvm.eval(&args[0])?.as_uint64().ok_or("input argument must be uint64")?;
-    let a2 = dvm.eval(&args[1])?.as_uint64().ok_or("input argument must be uint64")?;
+    let a1 = dvm
+        .eval(&args[0])?
+        .as_uint64()
+        .ok_or("input argument must be uint64")?;
+    let a2 = dvm
+        .eval(&args[1])?
+        .as_uint64()
+        .ok_or("input argument must be uint64")?;
     Ok(ExprValue::Uint64(a1.min(a2)))
 }
 
 fn builtin_max(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(2, args.len());
-    let a1 = dvm.eval(&args[0])?.as_uint64().ok_or("input argument must be uint64")?;
-    let a2 = dvm.eval(&args[1])?.as_uint64().ok_or("input argument must be uint64")?;
+    let a1 = dvm
+        .eval(&args[0])?
+        .as_uint64()
+        .ok_or("input argument must be uint64")?;
+    let a2 = dvm
+        .eval(&args[1])?
+        .as_uint64()
+        .ok_or("input argument must be uint64")?;
     Ok(ExprValue::Uint64(a1.max(a2)))
 }
 
 fn builtin_substr(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, String> {
     checkargscount(3, args.len());
-    let input = dvm.eval(&args[0])?.as_string().ok_or("input argument must be valid string")?;
-    let start = dvm.eval(&args[1])?.as_uint64().ok_or("input argument must be valid uint64")?;
-    let length = dvm.eval(&args[2])?.as_uint64().ok_or("input argument must be valid uint64")?;
+    let input = dvm
+        .eval(&args[0])?
+        .as_string()
+        .ok_or("input argument must be valid string")?;
+    let start = dvm
+        .eval(&args[1])?
+        .as_uint64()
+        .ok_or("input argument must be valid uint64")?;
+    let length = dvm
+        .eval(&args[2])?
+        .as_uint64()
+        .ok_or("input argument must be valid uint64")?;
     let asbytes = input.as_bytes();
     if start >= asbytes.len() as u64 {
         return Ok(ExprValue::String(String::new()));
@@ -1864,7 +2268,8 @@ fn builtin_substr(dvm: &mut DVMInterpreter, args: &[Expr]) -> Result<ExprValue, 
     if start + length > asbytes.len() as u64 {
         length = asbytes.len() as u64 - start;
     }
-    let sub = String::from_utf8_lossy(&asbytes[start as usize..(start + length) as usize]).into_owned();
+    let sub =
+        String::from_utf8_lossy(&asbytes[start as usize..(start + length) as usize]).into_owned();
     Ok(ExprValue::String(sub))
 }
 
@@ -1904,9 +2309,13 @@ impl TXStorage {
     pub fn load(&mut self, dkey: &DataKey, found: &mut u64) -> Variable {
         *found = 0;
         let kbytes = dkey.marshal_binary_panic();
-        if let Some(result) = self.raw_keys.get(&String::from_utf8_lossy(&kbytes).into_owned()) {
+        if let Some(result) = self
+            .raw_keys
+            .get(&String::from_utf8_lossy(&kbytes).into_owned())
+        {
             *found = 1;
-            let value = Variable::unmarshal_binary(result).unwrap_or_else(|_| panic!("corruption in DB"));
+            let value =
+                Variable::unmarshal_binary(result).unwrap_or_else(|_| panic!("corruption in DB"));
             if let Some(state) = &mut self.state {
                 if value.length() > 10 {
                     state.consume_storage_gas(value.length() / 10);
@@ -1920,10 +2329,20 @@ impl TXStorage {
         // committed SC data tree, so LOAD sees state STOREd by earlier calls.
         // (execute_sc_function copies tree entries into raw_keys before run.)
         if let Some(state) = &mut self.state {
-            let v = Variable { name: String::new(), vtype: Vtype::Invalid, value_uint64: 0, value_string: String::new() };
+            let v = Variable {
+                name: String::new(),
+                vtype: Vtype::Invalid,
+                value_uint64: 0,
+                value_string: String::new(),
+            };
             state.consume_storage_gas(1.max(v.length() / 10));
         }
-        Variable { name: String::new(), vtype: Vtype::Invalid, value_uint64: 0, value_string: String::new() }
+        Variable {
+            name: String::new(),
+            vtype: Vtype::Invalid,
+            value_uint64: 0,
+            value_string: String::new(),
+        }
     }
 
     pub fn store(&mut self, dkey: &DataKey, v: &Variable) {
@@ -1932,15 +2351,23 @@ impl TXStorage {
         if let Some(state) = &mut self.state {
             state.consume_storage_gas(vbytes.len() as i64);
         }
-        self.raw_keys.insert(String::from_utf8_lossy(&kbytes).into_owned(), vbytes);
+        self.raw_keys
+            .insert(String::from_utf8_lossy(&kbytes).into_owned(), vbytes);
     }
 
     pub fn delete(&mut self, dkey: &DataKey) {
         let kbytes = dkey.marshal_binary_panic();
-        self.raw_keys.insert(String::from_utf8_lossy(&kbytes).into_owned(), Vec::new());
+        self.raw_keys
+            .insert(String::from_utf8_lossy(&kbytes).into_owned(), Vec::new());
     }
 
-    pub fn send_external(&mut self, sender_scid: [u8; 32], asset: [u8; 32], addr: String, amount: u64) {
+    pub fn send_external(
+        &mut self,
+        sender_scid: [u8; 32],
+        asset: [u8; 32],
+        addr: String,
+        amount: u64,
+    ) {
         // Mirror Go TX_Storage.SendExternal: append a TransferExternal to the
         // transfers accumulated for this sender SCID. The address arrives as a
         // 33-byte compressed-point string (validated by the caller).
@@ -1951,7 +2378,11 @@ impl TXStorage {
         self.transfers
             .entry(sender_scid)
             .or_default()
-            .push(crate::sc::TransferExternal { asset, address, amount });
+            .push(crate::sc::TransferExternal {
+                asset,
+                address,
+                amount,
+            });
     }
 }
 
@@ -2027,7 +2458,10 @@ End Function"#;
         let toks = tokenize("LET x = 5");
         let merged = merge_operator_tokens(toks);
         let ops: Vec<&str> = merged.iter().map(|(_, t)| t.as_str()).collect();
-        assert!(ops.contains(&"=") && !ops.contains(&"=="), "lone = mishandled: {ops:?}");
+        assert!(
+            ops.contains(&"=") && !ops.contains(&"=="),
+            "lone = mishandled: {ops:?}"
+        );
     }
 
     #[test]
@@ -2047,7 +2481,9 @@ Function CreateSwap(id String, sellToken String, sellAmount Uint64, buyToken Str
 End Function
 "#;
         let sc = parse_smart_contract(code).expect("parse");
-        let mut state = SharedState::new(&[0u8; 32], &[0u8; 32], &[0u8; 32], &[0u8; 33], 100, 100, 100);
+        let mut state = SharedState::new(
+            &[0u8; 32], &[0u8; 32], &[0u8; 32], &[0u8; 33], 100, 100, 100,
+        );
         let params: std::collections::HashMap<String, String> = [
             ("id".to_string(), "swap1".to_string()),
             ("sellToken".to_string(), "DERO".to_string()),
@@ -2056,9 +2492,14 @@ End Function
             ("buyAmount".to_string(), "500".to_string()),
             ("maker".to_string(), "deto1qyyawp87a...".to_string()),
             ("timeout".to_string(), "100".to_string()),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
         let r = run_smart_contract(&sc, "CreateSwap", &mut state, &params)
             .expect("CreateSwap should run without 'trailing tokens'");
-        assert_eq!(r.value_uint64, 0, "CreateSwap should RETURN 0 (success, commits)");
+        assert_eq!(
+            r.value_uint64, 0,
+            "CreateSwap should RETURN 0 (success, commits)"
+        );
     }
 }

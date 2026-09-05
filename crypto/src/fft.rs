@@ -31,7 +31,10 @@ fn pow_mod_hex(base_hex: &str, exp: u64) -> Fr {
 }
 
 fn omega_for(length: usize, inverse: bool) -> Fr {
-    assert!(length >= 2 && length.is_power_of_two(), "length must be a power of 2");
+    assert!(
+        length >= 2 && length.is_power_of_two(),
+        "length must be a power of 2"
+    );
     let mut omega = pow_mod_hex(UNITY_HEX, (1u64 << 28) / length as u64);
     if inverse {
         omega = omega.inverse().unwrap();
@@ -99,7 +102,10 @@ pub fn convolution(exponent: &FieldVector, base: &PointVector) -> PointVector {
     let exponent_fft = fft_fieldvector(&exponent.flip(), false);
     let temp = fft_generatorvector(base, false).hadamard(&exponent_fft);
     let inv2 = Fr::from(2u64).inverse().unwrap();
-    let half = temp.slice(0, size / 2).add(&temp.slice(size / 2, size)).times(inv2);
+    let half = temp
+        .slice(0, size / 2)
+        .add(&temp.slice(size / 2, size))
+        .times(inv2);
     fft_generatorvector(&half, true)
 }
 
@@ -107,7 +113,7 @@ pub fn convolution(exponent: &FieldVector, base: &PointVector) -> PointVector {
 mod tests {
     use super::*;
     use crate::curve::N_HEX;
-    
+
     #[test]
     fn unity_is_primitive() {
         // unity^(2^28) == 1 mod n
@@ -149,7 +155,15 @@ mod tests {
             fr_to_be_bytes(fr_from_be_bytes(&b))
         };
         let zero = [0u8; 32];
-        assert_eq!(fwd.to_hex(), vec![hex::encode(expect), hex::encode(zero), hex::encode(zero), hex::encode(zero)]);
+        assert_eq!(
+            fwd.to_hex(),
+            vec![
+                hex::encode(expect),
+                hex::encode(zero),
+                hex::encode(zero),
+                hex::encode(zero)
+            ]
+        );
         let _ = N_HEX;
     }
 }

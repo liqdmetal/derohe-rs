@@ -22,10 +22,10 @@ use dero_crypto::curve::{be32_to_bigint, decode_compressed};
 use dero_crypto::dvm::{parse_smart_contract, SmartContract};
 use dero_crypto::elgamal::ElGamal;
 use dero_crypto::hash_to_point::base_g;
-use dero_crypto::rpc_args::{Argument, ArgValue, Arguments, DATA_HASH, DATA_STRING, DATA_UINT64};
+use dero_crypto::rpc_args::{ArgValue, Argument, Arguments, DATA_HASH, DATA_STRING, DATA_UINT64};
 use dero_crypto::sc::{
     execute_sc_function, load_sc_asset_value, process_external, sanity_check_external_transfers,
-    seed_store_from_tree, Snapshot, TreeWrapper, TransferExternal,
+    seed_store_from_tree, Snapshot, TransferExternal, TreeWrapper,
 };
 
 fn new_tree_wrapper() -> TreeWrapper {
@@ -170,9 +170,21 @@ impl Ctx {
 
     fn call(&mut self, entrypoint: &str, args: Vec<(String, ArgValue)>, incoming: u64) -> u64 {
         let mut a: Vec<Argument> = vec![
-            Argument { name: "SC_ACTION".into(), data_type: DATA_UINT64, value: ArgValue::U64(0) },
-            Argument { name: "SC_ID".into(), data_type: DATA_HASH, value: ArgValue::Hash(self.scid) },
-            Argument { name: "entrypoint".into(), data_type: DATA_STRING, value: ArgValue::Str(entrypoint.into()) },
+            Argument {
+                name: "SC_ACTION".into(),
+                data_type: DATA_UINT64,
+                value: ArgValue::U64(0),
+            },
+            Argument {
+                name: "SC_ID".into(),
+                data_type: DATA_HASH,
+                value: ArgValue::Hash(self.scid),
+            },
+            Argument {
+                name: "entrypoint".into(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(entrypoint.into()),
+            },
         ];
         for (k, v) in args {
             let (dt, val) = match v {
@@ -180,7 +192,11 @@ impl Ctx {
                 ArgValue::Str(s) => (DATA_STRING, ArgValue::Str(s)),
                 other => (DATA_STRING, other),
             };
-            a.push(Argument { name: k, data_type: dt, value: val });
+            a.push(Argument {
+                name: k,
+                data_type: dt,
+                value: val,
+            });
         }
         let args = Arguments(a);
         let bytes = args.marshal_binary().expect("marshal scdata");
@@ -190,9 +206,21 @@ impl Ctx {
         }
         self.txid[0] = self.txid[0].wrapping_add(1);
         match execute_sc_function(
-            &mut self.sc_meta, &mut self.data_tree, &self.scid,
-            self.bl_height, self.bl_height, self.bl_height, &self.blid, &self.txid,
-            &self.sc, entrypoint, 0, &[0u8; 33], &incoming_map, &bytes, 0,
+            &mut self.sc_meta,
+            &mut self.data_tree,
+            &self.scid,
+            self.bl_height,
+            self.bl_height,
+            self.bl_height,
+            &self.blid,
+            &self.txid,
+            &self.sc,
+            entrypoint,
+            0,
+            &[0u8; 33],
+            &incoming_map,
+            &bytes,
+            0,
         ) {
             Ok((ret, _gas)) => ret,
             Err(e) if e == "Discarded knowingly" => 1,
@@ -208,10 +236,26 @@ impl Ctx {
 
     fn query_string(&mut self, entrypoint: &str, id: &str) -> String {
         let a: Vec<Argument> = vec![
-            Argument { name: "SC_ACTION".into(), data_type: DATA_UINT64, value: ArgValue::U64(0) },
-            Argument { name: "SC_ID".into(), data_type: DATA_HASH, value: ArgValue::Hash(self.scid) },
-            Argument { name: "entrypoint".into(), data_type: DATA_STRING, value: ArgValue::Str(entrypoint.into()) },
-            Argument { name: "id".into(), data_type: DATA_STRING, value: ArgValue::Str(id.into()) },
+            Argument {
+                name: "SC_ACTION".into(),
+                data_type: DATA_UINT64,
+                value: ArgValue::U64(0),
+            },
+            Argument {
+                name: "SC_ID".into(),
+                data_type: DATA_HASH,
+                value: ArgValue::Hash(self.scid),
+            },
+            Argument {
+                name: "entrypoint".into(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(entrypoint.into()),
+            },
+            Argument {
+                name: "id".into(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(id.into()),
+            },
         ];
         let args = Arguments(a.clone());
         let _bytes = args.marshal_binary().expect("marshal scdata");
@@ -219,12 +263,22 @@ impl Ctx {
             let mut p = std::collections::HashMap::new();
             if let Some(f) = self.sc.functions.get(entrypoint) {
                 for fp in &f.params {
-                    if let Some(v) = args.get_string(&fp.name) { p.insert(fp.name.clone(), v); }
+                    if let Some(v) = args.get_string(&fp.name) {
+                        p.insert(fp.name.clone(), v);
+                    }
                 }
             }
             p
         };
-        let mut state = dero_crypto::dvm::SharedState::new(&self.scid, &self.blid, &self.txid, &[0u8; 33], self.bl_height, self.bl_height, self.bl_height);
+        let mut state = dero_crypto::dvm::SharedState::new(
+            &self.scid,
+            &self.blid,
+            &self.txid,
+            &[0u8; 33],
+            self.bl_height,
+            self.bl_height,
+            self.bl_height,
+        );
         seed_store_from_tree(&mut state.store, &self.data_tree);
         let r = dero_crypto::dvm::run_smart_contract(&self.sc, entrypoint, &mut state, &params)
             .expect("read-only query");
@@ -233,10 +287,26 @@ impl Ctx {
 
     fn query_uint64(&mut self, entrypoint: &str, id: &str) -> u64 {
         let a: Vec<Argument> = vec![
-            Argument { name: "SC_ACTION".into(), data_type: DATA_UINT64, value: ArgValue::U64(0) },
-            Argument { name: "SC_ID".into(), data_type: DATA_HASH, value: ArgValue::Hash(self.scid) },
-            Argument { name: "entrypoint".into(), data_type: DATA_STRING, value: ArgValue::Str(entrypoint.into()) },
-            Argument { name: "id".into(), data_type: DATA_STRING, value: ArgValue::Str(id.into()) },
+            Argument {
+                name: "SC_ACTION".into(),
+                data_type: DATA_UINT64,
+                value: ArgValue::U64(0),
+            },
+            Argument {
+                name: "SC_ID".into(),
+                data_type: DATA_HASH,
+                value: ArgValue::Hash(self.scid),
+            },
+            Argument {
+                name: "entrypoint".into(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(entrypoint.into()),
+            },
+            Argument {
+                name: "id".into(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(id.into()),
+            },
         ];
         let args = Arguments(a.clone());
         let _bytes = args.marshal_binary().expect("marshal scdata");
@@ -244,12 +314,22 @@ impl Ctx {
             let mut p = std::collections::HashMap::new();
             if let Some(f) = self.sc.functions.get(entrypoint) {
                 for fp in &f.params {
-                    if let Some(v) = args.get_string(&fp.name) { p.insert(fp.name.clone(), v); }
+                    if let Some(v) = args.get_string(&fp.name) {
+                        p.insert(fp.name.clone(), v);
+                    }
                 }
             }
             p
         };
-        let mut state = dero_crypto::dvm::SharedState::new(&self.scid, &self.blid, &self.txid, &[0u8; 33], self.bl_height, self.bl_height, self.bl_height);
+        let mut state = dero_crypto::dvm::SharedState::new(
+            &self.scid,
+            &self.blid,
+            &self.txid,
+            &[0u8; 33],
+            self.bl_height,
+            self.bl_height,
+            self.bl_height,
+        );
         seed_store_from_tree(&mut state.store, &self.data_tree);
         let r = dero_crypto::dvm::run_smart_contract(&self.sc, entrypoint, &mut state, &params)
             .expect("read-only query");
@@ -269,13 +349,23 @@ impl Ctx {
         }
         let mut cache: std::collections::HashMap<[u8; 32], dero_crypto::graviton::Tree> =
             std::collections::HashMap::new();
-        let ss = Snapshot { trees: std::collections::HashMap::new() };
+        let ss = Snapshot {
+            trees: std::collections::HashMap::new(),
+        };
         sanity_check_external_transfers(&mut self.data_tree, balance_tree, &self.scid)
             .expect("sanity_check_external_transfers must pass");
         process_external(
-            &mut cache, &ss, balance_tree, &self.scid, &mut self.data_tree, &mut self.sc_meta,
+            &mut cache,
+            &ss,
+            balance_tree,
+            &self.scid,
+            &mut self.data_tree,
+            &mut self.sc_meta,
         );
-        assert!(self.data_tree.transfers.is_empty(), "process_external consumes transfers");
+        assert!(
+            self.data_tree.transfers.is_empty(),
+            "process_external consumes transfers"
+        );
     }
 }
 
@@ -314,7 +404,10 @@ fn register_account(tree: &mut dero_crypto::graviton::Tree, addr: &str, balance:
     let mut r = [0u8; 32];
     r[31] = 9;
     let cm = ElGamal::commit(&pk, &u64_to_32(balance), &r);
-    let nb = NonceBalance { nonce_height: 0, balance:cm.clone() };
+    let nb = NonceBalance {
+        nonce_height: 0,
+        balance: cm.clone(),
+    };
     tree.put(&ab, &nb.serialize());
     cm
 }
@@ -323,14 +416,24 @@ fn register_account(tree: &mut dero_crypto::graviton::Tree, addr: &str, balance:
 /// ElGamal). Panics if the account isn't registered.
 fn read_balance(tree: &dero_crypto::graviton::Tree, addr: &str) -> ElGamal {
     let ab = addr_bytes(addr);
-    let raw = tree.get(&ab.to_vec()).expect("account registered in balance tree");
-    NonceBalance::deserialize(&raw).expect("nonce deserialize").balance
+    let raw = tree
+        .get(&ab.to_vec())
+        .expect("account registered in balance tree");
+    NonceBalance::deserialize(&raw)
+        .expect("nonce deserialize")
+        .balance
 }
 
 /// Assert an account's balance-tree ciphertext grew by exactly `amount` DERO
 /// (left += amount*G, right unchanged) — the homomorphic `.plus` the shipped
 /// process_external uses. `before` is the pre-settle ciphertext.
-fn assert_credited(tree: &dero_crypto::graviton::Tree, addr: &str, before: &ElGamal, amount: u64, what: &str) {
+fn assert_credited(
+    tree: &dero_crypto::graviton::Tree,
+    addr: &str,
+    before: &ElGamal,
+    amount: u64,
+    what: &str,
+) {
     let after = read_balance(tree, addr);
     let g = base_g();
     assert_eq!(
@@ -338,7 +441,10 @@ fn assert_credited(tree: &dero_crypto::graviton::Tree, addr: &str, before: &ElGa
         g.mul_bigint(be32_to_bigint(&u64_to_32(amount))),
         "{what}: balance-tree entry credited exactly {amount}"
     );
-    assert_eq!(after.right, before.right, "{what}: homomorphic right unchanged");
+    assert_eq!(
+        after.right, before.right,
+        "{what}: homomorphic right unchanged"
+    );
 }
 
 /// Assert an account's balance-tree ciphertext is byte-identical to `before`
@@ -353,32 +459,52 @@ fn assert_untouched(tree: &dero_crypto::graviton::Tree, addr: &str, before: &ElG
 fn atomic_swap_full_lifecycle() {
     let preimage = b"relay-atomic-preimage-42";
     let hashlock = sha256_hex(preimage);
-    let funder = gen_addr();     // stored maker / funder
-    let taker = neg_g_addr();    // stored taker (counterparty payout recipient)
+    let funder = gen_addr(); // stored maker / funder
+    let taker = neg_g_addr(); // stored taker (counterparty payout recipient)
 
     // CreateSwap at height 100, timeout 50 -> expires at 150.
     let mut ctx = Ctx::new(100);
-    let ret = ctx.call("CreateSwap", vec![
-        ("id".into(), ArgValue::Str("a1".into())),
-        ("maker".into(), ArgValue::Str(funder.clone())),
-        ("taker".into(), ArgValue::Str(taker.clone())),
-        ("sellToken".into(), ArgValue::Str("DERO".into())),
-        ("sellAmount".into(), ArgValue::U64(1000)),
-        ("buyToken".into(), ArgValue::Str("USDT".into())),
-        ("buyAmount".into(), ArgValue::U64(500)),
-        ("hashlock".into(), ArgValue::Str(hashlock.clone())),
-        ("timeout".into(), ArgValue::U64(50)),
-    ], 0);
+    let ret = ctx.call(
+        "CreateSwap",
+        vec![
+            ("id".into(), ArgValue::Str("a1".into())),
+            ("maker".into(), ArgValue::Str(funder.clone())),
+            ("taker".into(), ArgValue::Str(taker.clone())),
+            ("sellToken".into(), ArgValue::Str("DERO".into())),
+            ("sellAmount".into(), ArgValue::U64(1000)),
+            ("buyToken".into(), ArgValue::Str("USDT".into())),
+            ("buyAmount".into(), ArgValue::U64(500)),
+            ("hashlock".into(), ArgValue::Str(hashlock.clone())),
+            ("timeout".into(), ArgValue::U64(50)),
+        ],
+        0,
+    );
     assert_eq!(ret, 0, "CreateSwap should succeed");
-    assert_eq!(ctx.query_uint64("GetState", "a1"), 0, "state 0 after create");
-    assert_eq!(ctx.query_string("GetMaker", "a1"), funder, "maker round-trips");
-    assert_eq!(ctx.query_string("GetTaker", "a1"), taker, "taker round-trips");
+    assert_eq!(
+        ctx.query_uint64("GetState", "a1"),
+        0,
+        "state 0 after create"
+    );
+    assert_eq!(
+        ctx.query_string("GetMaker", "a1"),
+        funder,
+        "maker round-trips"
+    );
+    assert_eq!(
+        ctx.query_string("GetTaker", "a1"),
+        taker,
+        "taker round-trips"
+    );
 
     // Fund with insufficient incoming -> reject, no payout
-    let ret = ctx.call("Fund", vec![
-        ("id".into(), ArgValue::Str("a1".into())),
-        ("funder".into(), ArgValue::Str(funder.clone())),
-    ], 500);
+    let ret = ctx.call(
+        "Fund",
+        vec![
+            ("id".into(), ArgValue::Str("a1".into())),
+            ("funder".into(), ArgValue::Str(funder.clone())),
+        ],
+        500,
+    );
     assert_eq!(ret, 1, "Fund with 500 (< sellAmount 1000) must reject");
     assert_eq!(ctx.query_uint64("GetState", "a1"), 0, "state stays 0");
     assert!(ctx.transfers().is_empty(), "no payout on failed fund");
@@ -387,44 +513,87 @@ fn atomic_swap_full_lifecycle() {
     // _funded tracks the ACTUAL DEROVALUE (1500), so a full refund/claim
     // returns the over-fund too. (One successful Fund per swap: Fund rejects
     // once state is already 1.)
-    let ret = ctx.call("Fund", vec![
-        ("id".into(), ArgValue::Str("a1".into())),
-        ("funder".into(), ArgValue::Str(funder.clone())),
-    ], 1500);
+    let ret = ctx.call(
+        "Fund",
+        vec![
+            ("id".into(), ArgValue::Str("a1".into())),
+            ("funder".into(), ArgValue::Str(funder.clone())),
+        ],
+        1500,
+    );
     assert_eq!(ret, 0, "Fund with 1500 should succeed");
     assert_eq!(ctx.query_uint64("GetState", "a1"), 1, "state 1 after fund");
-    assert_eq!(ctx.query_uint64("GetFunded", "a1"), 1500, "over-fund captured");
+    assert_eq!(
+        ctx.query_uint64("GetFunded", "a1"),
+        1500,
+        "over-fund captured"
+    );
     assert!(ctx.transfers().is_empty(), "funding does not pay out yet");
 
     // Claim with WRONG preimage -> reject, no payout
-    let ret = ctx.call("Claim", vec![
-        ("id".into(), ArgValue::Str("a1".into())),
-        ("preimage".into(), ArgValue::Str("wrong-preimage".into())),
-    ], 0);
+    let ret = ctx.call(
+        "Claim",
+        vec![
+            ("id".into(), ArgValue::Str("a1".into())),
+            ("preimage".into(), ArgValue::Str("wrong-preimage".into())),
+        ],
+        0,
+    );
     assert_eq!(ret, 1, "Claim with wrong preimage must reject");
     assert_eq!(ctx.query_uint64("GetState", "a1"), 1, "state stays 1");
     assert!(ctx.transfers().is_empty(), "no payout on failed claim");
 
     // Claim with CORRECT preimage -> settle (state 2) AND pay the taker the
     // funded amount. The payout leg must appear exactly once.
-    let ret = ctx.call("Claim", vec![
-        ("id".into(), ArgValue::Str("a1".into())),
-        ("preimage".into(), ArgValue::Str(String::from_utf8(preimage.to_vec()).unwrap())),
-    ], 0);
+    let ret = ctx.call(
+        "Claim",
+        vec![
+            ("id".into(), ArgValue::Str("a1".into())),
+            (
+                "preimage".into(),
+                ArgValue::Str(String::from_utf8(preimage.to_vec()).unwrap()),
+            ),
+        ],
+        0,
+    );
     assert_eq!(ret, 0, "Claim with correct preimage should succeed");
     assert_eq!(ctx.query_uint64("GetState", "a1"), 2, "state 2 after claim");
-    assert_eq!(ctx.transfers().len(), 1, "exactly one payout transfer on claim");
-    assert_eq!(ctx.transfers()[0].asset, dero_asset(), "payout asset is DERO");
-    assert_eq!(ctx.transfers()[0].address, addr_bytes(&taker), "payout goes to taker");
-    assert_eq!(ctx.transfers()[0].amount, 1500, "payout = actual funded amount");
+    assert_eq!(
+        ctx.transfers().len(),
+        1,
+        "exactly one payout transfer on claim"
+    );
+    assert_eq!(
+        ctx.transfers()[0].asset,
+        dero_asset(),
+        "payout asset is DERO"
+    );
+    assert_eq!(
+        ctx.transfers()[0].address,
+        addr_bytes(&taker),
+        "payout goes to taker"
+    );
+    assert_eq!(
+        ctx.transfers()[0].amount,
+        1500,
+        "payout = actual funded amount"
+    );
 
     // Refund on a settled swap -> reject (state != 1), no extra payout
-    let ret = ctx.call("Refund", vec![
-        ("id".into(), ArgValue::Str("a1".into())),
-        ("funder".into(), ArgValue::Str(funder.clone())),
-    ], 0);
+    let ret = ctx.call(
+        "Refund",
+        vec![
+            ("id".into(), ArgValue::Str("a1".into())),
+            ("funder".into(), ArgValue::Str(funder.clone())),
+        ],
+        0,
+    );
     assert_eq!(ret, 1, "Refund on settled swap must reject");
-    assert_eq!(ctx.transfers().len(), 1, "no refund transfer on settled swap");
+    assert_eq!(
+        ctx.transfers().len(),
+        1,
+        "no refund transfer on settled swap"
+    );
 }
 
 #[test]
@@ -437,56 +606,99 @@ fn atomic_swap_refund_after_timeout() {
     // Funded but never claimed; timeout expires; the funder (and ONLY the
     // funder) can refund, paying the locked value back to the funder.
     let mut ctx = Ctx::new(100); // CreateSwap timeout 10 -> expires at 110
-    let ret = ctx.call("CreateSwap", vec![
-        ("id".into(), ArgValue::Str("a2".into())),
-        ("maker".into(), ArgValue::Str(funder.clone())),
-        ("taker".into(), ArgValue::Str(taker.clone())),
-        ("sellToken".into(), ArgValue::Str("DERO".into())),
-        ("sellAmount".into(), ArgValue::U64(999)),
-        ("buyToken".into(), ArgValue::Str("USDT".into())),
-        ("buyAmount".into(), ArgValue::U64(499)),
-        ("hashlock".into(), ArgValue::Str(hashlock)),
-        ("timeout".into(), ArgValue::U64(10)),
-    ], 0);
+    let ret = ctx.call(
+        "CreateSwap",
+        vec![
+            ("id".into(), ArgValue::Str("a2".into())),
+            ("maker".into(), ArgValue::Str(funder.clone())),
+            ("taker".into(), ArgValue::Str(taker.clone())),
+            ("sellToken".into(), ArgValue::Str("DERO".into())),
+            ("sellAmount".into(), ArgValue::U64(999)),
+            ("buyToken".into(), ArgValue::Str("USDT".into())),
+            ("buyAmount".into(), ArgValue::U64(499)),
+            ("hashlock".into(), ArgValue::Str(hashlock)),
+            ("timeout".into(), ArgValue::U64(10)),
+        ],
+        0,
+    );
     assert_eq!(ret, 0);
 
     // Fund at height 100 with an over-fund (1200 > 999) to prove the refund
     // returns the ACTUAL locked amount, not the nominal sellAmount.
-    let ret = ctx.call("Fund", vec![
-        ("id".into(), ArgValue::Str("a2".into())),
-        ("funder".into(), ArgValue::Str(funder.clone())),
-    ], 1200);
+    let ret = ctx.call(
+        "Fund",
+        vec![
+            ("id".into(), ArgValue::Str("a2".into())),
+            ("funder".into(), ArgValue::Str(funder.clone())),
+        ],
+        1200,
+    );
     assert_eq!(ret, 0, "fund");
     assert_eq!(ctx.query_uint64("GetState", "a2"), 1);
     assert_eq!(ctx.query_uint64("GetFunded", "a2"), 1200);
 
     // Refund BEFORE timeout -> reject, no payout
-    let ret = ctx.call("Refund", vec![
-        ("id".into(), ArgValue::Str("a2".into())),
-        ("funder".into(), ArgValue::Str(funder.clone())),
-    ], 0);
+    let ret = ctx.call(
+        "Refund",
+        vec![
+            ("id".into(), ArgValue::Str("a2".into())),
+            ("funder".into(), ArgValue::Str(funder.clone())),
+        ],
+        0,
+    );
     assert_eq!(ret, 1, "refund before timeout must reject");
     assert_eq!(ctx.query_uint64("GetState", "a2"), 1);
     assert!(ctx.transfers().is_empty(), "no payout on early refund");
 
     // Advance chain past timeout, refund -> state 3, pay the funder.
     ctx.bl_height = 120;
-    let ret = ctx.call("Refund", vec![
-        ("id".into(), ArgValue::Str("a2".into())),
-        ("funder".into(), ArgValue::Str(funder.clone())),
-    ], 0);
+    let ret = ctx.call(
+        "Refund",
+        vec![
+            ("id".into(), ArgValue::Str("a2".into())),
+            ("funder".into(), ArgValue::Str(funder.clone())),
+        ],
+        0,
+    );
     assert_eq!(ret, 0, "refund after timeout should succeed");
-    assert_eq!(ctx.query_uint64("GetState", "a2"), 3, "state 3 after refund");
-    assert_eq!(ctx.transfers().len(), 1, "exactly one payout transfer on refund");
-    assert_eq!(ctx.transfers()[0].asset, dero_asset(), "refund asset is DERO");
-    assert_eq!(ctx.transfers()[0].address, addr_bytes(&funder), "refund goes to funder");
-    assert_eq!(ctx.transfers()[0].amount, 1200, "refund returns actual funded amount");
+    assert_eq!(
+        ctx.query_uint64("GetState", "a2"),
+        3,
+        "state 3 after refund"
+    );
+    assert_eq!(
+        ctx.transfers().len(),
+        1,
+        "exactly one payout transfer on refund"
+    );
+    assert_eq!(
+        ctx.transfers()[0].asset,
+        dero_asset(),
+        "refund asset is DERO"
+    );
+    assert_eq!(
+        ctx.transfers()[0].address,
+        addr_bytes(&funder),
+        "refund goes to funder"
+    );
+    assert_eq!(
+        ctx.transfers()[0].amount,
+        1200,
+        "refund returns actual funded amount"
+    );
 
     // Claim after refund -> reject, no extra payout
-    let ret = ctx.call("Claim", vec![
-        ("id".into(), ArgValue::Str("a2".into())),
-        ("preimage".into(), ArgValue::Str(String::from_utf8(preimage.to_vec()).unwrap())),
-    ], 0);
+    let ret = ctx.call(
+        "Claim",
+        vec![
+            ("id".into(), ArgValue::Str("a2".into())),
+            (
+                "preimage".into(),
+                ArgValue::Str(String::from_utf8(preimage.to_vec()).unwrap()),
+            ),
+        ],
+        0,
+    );
     assert_eq!(ret, 1, "claim after refund must reject");
     assert_eq!(ctx.transfers().len(), 1, "no payout on claim after refund");
 }
@@ -500,43 +712,63 @@ fn atomic_swap_refund_is_funder_only() {
     let attacker = x_addr(2); // a third party who is NOT the funder
 
     let mut ctx = Ctx::new(100); // timeout 10 -> expires at 110
-    let ret = ctx.call("CreateSwap", vec![
-        ("id".into(), ArgValue::Str("a3".into())),
-        ("maker".into(), ArgValue::Str(funder.clone())),
-        ("taker".into(), ArgValue::Str(taker.clone())),
-        ("sellToken".into(), ArgValue::Str("DERO".into())),
-        ("sellAmount".into(), ArgValue::U64(500)),
-        ("buyToken".into(), ArgValue::Str("USDT".into())),
-        ("buyAmount".into(), ArgValue::U64(250)),
-        ("hashlock".into(), ArgValue::Str(hashlock)),
-        ("timeout".into(), ArgValue::U64(10)),
-    ], 0);
+    let ret = ctx.call(
+        "CreateSwap",
+        vec![
+            ("id".into(), ArgValue::Str("a3".into())),
+            ("maker".into(), ArgValue::Str(funder.clone())),
+            ("taker".into(), ArgValue::Str(taker.clone())),
+            ("sellToken".into(), ArgValue::Str("DERO".into())),
+            ("sellAmount".into(), ArgValue::U64(500)),
+            ("buyToken".into(), ArgValue::Str("USDT".into())),
+            ("buyAmount".into(), ArgValue::U64(250)),
+            ("hashlock".into(), ArgValue::Str(hashlock)),
+            ("timeout".into(), ArgValue::U64(10)),
+        ],
+        0,
+    );
     assert_eq!(ret, 0);
 
-    let ret = ctx.call("Fund", vec![
-        ("id".into(), ArgValue::Str("a3".into())),
-        ("funder".into(), ArgValue::Str(funder.clone())),
-    ], 500);
+    let ret = ctx.call(
+        "Fund",
+        vec![
+            ("id".into(), ArgValue::Str("a3".into())),
+            ("funder".into(), ArgValue::Str(funder.clone())),
+        ],
+        500,
+    );
     assert_eq!(ret, 0, "fund");
 
     // After timeout, an attacker (wrong funder) cannot trigger the refund.
     ctx.bl_height = 120;
-    let ret = ctx.call("Refund", vec![
-        ("id".into(), ArgValue::Str("a3".into())),
-        ("funder".into(), ArgValue::Str(attacker)),
-    ], 0);
+    let ret = ctx.call(
+        "Refund",
+        vec![
+            ("id".into(), ArgValue::Str("a3".into())),
+            ("funder".into(), ArgValue::Str(attacker)),
+        ],
+        0,
+    );
     assert_eq!(ret, 1, "refund by non-funder must reject");
     assert_eq!(ctx.query_uint64("GetState", "a3"), 1, "state stays funded");
     assert!(ctx.transfers().is_empty(), "no payout to attacker");
 
     // The real funder can still refund and recovers the value.
-    let ret = ctx.call("Refund", vec![
-        ("id".into(), ArgValue::Str("a3".into())),
-        ("funder".into(), ArgValue::Str(funder.clone())),
-    ], 0);
+    let ret = ctx.call(
+        "Refund",
+        vec![
+            ("id".into(), ArgValue::Str("a3".into())),
+            ("funder".into(), ArgValue::Str(funder.clone())),
+        ],
+        0,
+    );
     assert_eq!(ret, 0, "funder refund succeeds");
     assert_eq!(ctx.transfers().len(), 1);
-    assert_eq!(ctx.transfers()[0].address, addr_bytes(&funder), "payout to funder");
+    assert_eq!(
+        ctx.transfers()[0].address,
+        addr_bytes(&funder),
+        "payout to funder"
+    );
     assert_eq!(ctx.transfers()[0].amount, 500);
 }
 
@@ -546,8 +778,8 @@ fn send_value_movement_credits_real_balance_tree() {
     let taker = neg_g_addr();
     let init = 50_000u64;
     let mut balance_tree = dero_crypto::graviton::Tree::new("swap-value-tree");
-    let funder_before = register_account(&mut balance_tree,&funder,init);
-    let taker_before = register_account(&mut balance_tree,&taker,init);
+    let funder_before = register_account(&mut balance_tree, &funder, init);
+    let taker_before = register_account(&mut balance_tree, &taker, init);
 
     // The payout emits the 33-byte compressed key as the destination; that
     // exact key must already be REGISTERED in the balance tree (mirrors a real
@@ -555,7 +787,9 @@ fn send_value_movement_credits_real_balance_tree() {
 
     {
         let ab = addr_bytes(&taker);
-        let raw = balance_tree.get(&ab.to_vec()).expect("taker registered in balance tree");
+        let raw = balance_tree
+            .get(&ab.to_vec())
+            .expect("taker registered in balance tree");
         let saved = NonceBalance::deserialize(&raw).expect("nonce deserialize");
         assert_eq!(saved.balance.clone().left, taker_before.clone().left);
     }
@@ -564,17 +798,21 @@ fn send_value_movement_credits_real_balance_tree() {
     let hashlock = sha256_hex(preimage);
     let mut ctx = Ctx::new(100);
     assert_eq!(
-        ctx.call("CreateSwap", vec![
-            ("id".into(), ArgValue::Str("v1".into())),
-            ("maker".into(), ArgValue::Str(funder.clone())),
-            ("taker".into(), ArgValue::Str(taker.clone())),
-            ("sellToken".into(), ArgValue::Str("DERO".into())),
-            ("sellAmount".into(), ArgValue::U64(1000)),
-            ("buyToken".into(), ArgValue::Str("USDT".into())),
-            ("buyAmount".into(), ArgValue::U64(500)),
-            ("hashlock".into(), ArgValue::Str(hashlock)),
-            ("timeout".into(), ArgValue::U64(50)),
-        ], 0),
+        ctx.call(
+            "CreateSwap",
+            vec![
+                ("id".into(), ArgValue::Str("v1".into())),
+                ("maker".into(), ArgValue::Str(funder.clone())),
+                ("taker".into(), ArgValue::Str(taker.clone())),
+                ("sellToken".into(), ArgValue::Str("DERO".into())),
+                ("sellAmount".into(), ArgValue::U64(1000)),
+                ("buyToken".into(), ArgValue::Str("USDT".into())),
+                ("buyAmount".into(), ArgValue::U64(500)),
+                ("hashlock".into(), ArgValue::Str(hashlock)),
+                ("timeout".into(), ArgValue::U64(50)),
+            ],
+            0
+        ),
         0,
         "create"
     );
@@ -600,7 +838,7 @@ fn send_value_movement_credits_real_balance_tree() {
     );
 
     // Claim -> flush ONE payout transfer of 1500 to the taker
-     assert_eq!(
+    assert_eq!(
         ctx.call(
             "Claim",
             vec![
@@ -618,11 +856,15 @@ fn send_value_movement_credits_real_balance_tree() {
     assert_eq!(ctx.transfers().len(), 1, "one payout transfer on claim");
 
     // Before the chain's settlement phase, the taker's balance-tree entry is untouched
-     {
+    {
         let ab = addr_bytes(&taker);
         let raw = balance_tree.get(&ab.to_vec()).expect("taker registered");
         let nb = NonceBalance::deserialize(&raw).expect("nonce");
-        assert_eq!(nb.balance.left, taker_before.clone().left, "payout not yet credited");
+        assert_eq!(
+            nb.balance.left,
+            taker_before.clone().left,
+            "payout not yet credited"
+        );
     }
 
     // THE SHIPPED post-call settlement seam (add_complete_block's execute phase):
@@ -638,7 +880,7 @@ fn send_value_movement_credits_real_balance_tree() {
     );
 
     // taker's REAL balance-tree entry now carries +1500 (left += 1500*G, right unchanged — the exact `.plus` crediting the shipped seam uses).
-     {
+    {
         let ab = addr_bytes(&taker);
         let raw = balance_tree.get(&ab.to_vec()).expect("taker registered");
         let nb = NonceBalance::deserialize(&raw).expect("nonce");
@@ -660,7 +902,11 @@ fn send_value_movement_credits_real_balance_tree() {
         let fb = addr_bytes(&funder);
         let raw = balance_tree.get(&fb.to_vec()).expect("funder registered");
         let f = NonceBalance::deserialize(&raw).expect("nonce");
-        assert_eq!(f.balance.left, funder_before.clone().left, "funder untouched");
+        assert_eq!(
+            f.balance.left,
+            funder_before.clone().left,
+            "funder untouched"
+        );
     }
 }
 
@@ -679,25 +925,33 @@ fn refund_moves_value_back_to_funder() {
     let hashlock = sha256_hex(preimage);
     let mut ctx = Ctx::new(100); // timeout 10 -> expires at 110
     assert_eq!(
-        ctx.call("CreateSwap", vec![
-            ("id".into(), ArgValue::Str("r1".into())),
-            ("maker".into(), ArgValue::Str(funder.clone())),
-            ("taker".into(), ArgValue::Str(taker.clone())),
-            ("sellToken".into(), ArgValue::Str("DERO".into())),
-            ("sellAmount".into(), ArgValue::U64(1000)),
-            ("buyToken".into(), ArgValue::Str("USDT".into())),
-            ("buyAmount".into(), ArgValue::U64(500)),
-            ("hashlock".into(), ArgValue::Str(hashlock)),
-            ("timeout".into(), ArgValue::U64(10)),
-        ], 0),
+        ctx.call(
+            "CreateSwap",
+            vec![
+                ("id".into(), ArgValue::Str("r1".into())),
+                ("maker".into(), ArgValue::Str(funder.clone())),
+                ("taker".into(), ArgValue::Str(taker.clone())),
+                ("sellToken".into(), ArgValue::Str("DERO".into())),
+                ("sellAmount".into(), ArgValue::U64(1000)),
+                ("buyToken".into(), ArgValue::Str("USDT".into())),
+                ("buyAmount".into(), ArgValue::U64(500)),
+                ("hashlock".into(), ArgValue::Str(hashlock)),
+                ("timeout".into(), ArgValue::U64(10)),
+            ],
+            0
+        ),
         0,
         "create"
     );
     assert_eq!(
-        ctx.call("Fund", vec![
-            ("id".into(), ArgValue::Str("r1".into())),
-            ("funder".into(), ArgValue::Str(funder.clone())),
-        ], 1200),
+        ctx.call(
+            "Fund",
+            vec![
+                ("id".into(), ArgValue::Str("r1".into())),
+                ("funder".into(), ArgValue::Str(funder.clone())),
+            ],
+            1200
+        ),
         0,
         "fund"
     );
@@ -709,30 +963,51 @@ fn refund_moves_value_back_to_funder() {
 
     // Refund BEFORE timeout -> reject, no value moves.
     assert_eq!(
-        ctx.call("Refund", vec![
-            ("id".into(), ArgValue::Str("r1".into())),
-            ("funder".into(), ArgValue::Str(funder.clone())),
-        ], 0),
+        ctx.call(
+            "Refund",
+            vec![
+                ("id".into(), ArgValue::Str("r1".into())),
+                ("funder".into(), ArgValue::Str(funder.clone())),
+            ],
+            0
+        ),
         1,
         "refund before timeout rejects"
     );
     assert!(ctx.transfers().is_empty(), "no payout on early refund");
-    assert_untouched(&balance_tree, &funder, &funder_before, "funder before timeout");
+    assert_untouched(
+        &balance_tree,
+        &funder,
+        &funder_before,
+        "funder before timeout",
+    );
     assert_untouched(&balance_tree, &taker, &taker_before, "taker before timeout");
 
     // Advance past timeout, refund -> SC debited, funder credited.
     ctx.bl_height = 120;
     assert_eq!(
-        ctx.call("Refund", vec![
-            ("id".into(), ArgValue::Str("r1".into())),
-            ("funder".into(), ArgValue::Str(funder.clone())),
-        ], 0),
+        ctx.call(
+            "Refund",
+            vec![
+                ("id".into(), ArgValue::Str("r1".into())),
+                ("funder".into(), ArgValue::Str(funder.clone())),
+            ],
+            0
+        ),
         0,
         "refund after timeout succeeds"
     );
     assert_eq!(ctx.transfers().len(), 1, "one payout on refund");
-    assert_eq!(ctx.transfers()[0].address, addr_bytes(&funder), "refund to funder");
-    assert_eq!(ctx.transfers()[0].amount, 1200, "refund returns actual funded amount");
+    assert_eq!(
+        ctx.transfers()[0].address,
+        addr_bytes(&funder),
+        "refund to funder"
+    );
+    assert_eq!(
+        ctx.transfers()[0].amount,
+        1200,
+        "refund returns actual funded amount"
+    );
 
     ctx.settle_external(&mut balance_tree);
     assert_eq!(
@@ -740,7 +1015,13 @@ fn refund_moves_value_back_to_funder() {
         0,
         "SC debited the full funded value on refund settle"
     );
-    assert_credited(&balance_tree, &funder, &funder_before, 1200, "funder refund");
+    assert_credited(
+        &balance_tree,
+        &funder,
+        &funder_before,
+        1200,
+        "funder refund",
+    );
     assert_untouched(&balance_tree, &taker, &taker_before, "taker after refund");
 }
 
@@ -768,72 +1049,121 @@ fn multi_swap_isolation_in_one_balance_tree() {
     let mut c1 = Ctx::new(100);
     let mut c2 = Ctx::new(100);
     assert_eq!(
-        c1.call("CreateSwap", vec![
-            ("id".into(), ArgValue::Str("m1".into())),
-            ("maker".into(), ArgValue::Str(f1.clone())),
-            ("taker".into(), ArgValue::Str(t1.clone())),
-            ("sellToken".into(), ArgValue::Str("DERO".into())),
-            ("sellAmount".into(), ArgValue::U64(1000)),
-            ("buyToken".into(), ArgValue::Str("USDT".into())),
-            ("buyAmount".into(), ArgValue::U64(500)),
-            ("hashlock".into(), ArgValue::Str(h1)),
-            ("timeout".into(), ArgValue::U64(50)),
-        ], 0),
+        c1.call(
+            "CreateSwap",
+            vec![
+                ("id".into(), ArgValue::Str("m1".into())),
+                ("maker".into(), ArgValue::Str(f1.clone())),
+                ("taker".into(), ArgValue::Str(t1.clone())),
+                ("sellToken".into(), ArgValue::Str("DERO".into())),
+                ("sellAmount".into(), ArgValue::U64(1000)),
+                ("buyToken".into(), ArgValue::Str("USDT".into())),
+                ("buyAmount".into(), ArgValue::U64(500)),
+                ("hashlock".into(), ArgValue::Str(h1)),
+                ("timeout".into(), ArgValue::U64(50)),
+            ],
+            0
+        ),
         0,
         "create swap 1"
     );
     assert_eq!(
-        c2.call("CreateSwap", vec![
-            ("id".into(), ArgValue::Str("m2".into())),
-            ("maker".into(), ArgValue::Str(f2.clone())),
-            ("taker".into(), ArgValue::Str(t2.clone())),
-            ("sellToken".into(), ArgValue::Str("DERO".into())),
-            ("sellAmount".into(), ArgValue::U64(2000)),
-            ("buyToken".into(), ArgValue::Str("USDT".into())),
-            ("buyAmount".into(), ArgValue::U64(1000)),
-            ("hashlock".into(), ArgValue::Str(h2)),
-            ("timeout".into(), ArgValue::U64(50)),
-        ], 0),
+        c2.call(
+            "CreateSwap",
+            vec![
+                ("id".into(), ArgValue::Str("m2".into())),
+                ("maker".into(), ArgValue::Str(f2.clone())),
+                ("taker".into(), ArgValue::Str(t2.clone())),
+                ("sellToken".into(), ArgValue::Str("DERO".into())),
+                ("sellAmount".into(), ArgValue::U64(2000)),
+                ("buyToken".into(), ArgValue::Str("USDT".into())),
+                ("buyAmount".into(), ArgValue::U64(1000)),
+                ("hashlock".into(), ArgValue::Str(h2)),
+                ("timeout".into(), ArgValue::U64(50)),
+            ],
+            0
+        ),
         0,
         "create swap 2"
     );
 
     // Fund both: swap1 gets 1500, swap2 gets 2500.
     assert_eq!(
-        c1.call("Fund", vec![
-            ("id".into(), ArgValue::Str("m1".into())),
-            ("funder".into(), ArgValue::Str(f1.clone())),
-        ], 1500),
+        c1.call(
+            "Fund",
+            vec![
+                ("id".into(), ArgValue::Str("m1".into())),
+                ("funder".into(), ArgValue::Str(f1.clone())),
+            ],
+            1500
+        ),
         0,
         "fund swap 1"
     );
     assert_eq!(
-        c2.call("Fund", vec![
-            ("id".into(), ArgValue::Str("m2".into())),
-            ("funder".into(), ArgValue::Str(f2.clone())),
-        ], 2500),
+        c2.call(
+            "Fund",
+            vec![
+                ("id".into(), ArgValue::Str("m2".into())),
+                ("funder".into(), ArgValue::Str(f2.clone())),
+            ],
+            2500
+        ),
         0,
         "fund swap 2"
     );
-    assert_eq!(load_sc_asset_value(&c1.data_tree, &c1.scid, &dero_asset()), 1500, "SC1 holds 1500");
-    assert_eq!(load_sc_asset_value(&c2.data_tree, &c2.scid, &dero_asset()), 2500, "SC2 holds 2500");
+    assert_eq!(
+        load_sc_asset_value(&c1.data_tree, &c1.scid, &dero_asset()),
+        1500,
+        "SC1 holds 1500"
+    );
+    assert_eq!(
+        load_sc_asset_value(&c2.data_tree, &c2.scid, &dero_asset()),
+        2500,
+        "SC2 holds 2500"
+    );
 
     // Claim swap 1 only. Swap 2 must be completely untouched.
     assert_eq!(
-        c1.call("Claim", vec![
-            ("id".into(), ArgValue::Str("m1".into())),
-            ("preimage".into(), ArgValue::Str(String::from_utf8(p1.to_vec()).unwrap())),
-        ], 0),
+        c1.call(
+            "Claim",
+            vec![
+                ("id".into(), ArgValue::Str("m1".into())),
+                (
+                    "preimage".into(),
+                    ArgValue::Str(String::from_utf8(p1.to_vec()).unwrap())
+                ),
+            ],
+            0
+        ),
         0,
         "claim swap 1"
     );
     c1.settle_external(&mut balance_tree);
     assert_credited(&balance_tree, &t1, &t1_before, 1500, "taker1 after claim");
-    assert_untouched(&balance_tree, &t2, &t2_before, "taker2 untouched by swap1 claim");
+    assert_untouched(
+        &balance_tree,
+        &t2,
+        &t2_before,
+        "taker2 untouched by swap1 claim",
+    );
     assert_untouched(&balance_tree, &f1, &f1_before, "funder1 untouched by claim");
-    assert_untouched(&balance_tree, &f2, &f2_before, "funder2 untouched by swap1 claim");
-    assert_eq!(load_sc_asset_value(&c1.data_tree, &c1.scid, &dero_asset()), 0, "SC1 debited");
-    assert_eq!(load_sc_asset_value(&c2.data_tree, &c2.scid, &dero_asset()), 2500, "SC2 still holds 2500");
+    assert_untouched(
+        &balance_tree,
+        &f2,
+        &f2_before,
+        "funder2 untouched by swap1 claim",
+    );
+    assert_eq!(
+        load_sc_asset_value(&c1.data_tree, &c1.scid, &dero_asset()),
+        0,
+        "SC1 debited"
+    );
+    assert_eq!(
+        load_sc_asset_value(&c2.data_tree, &c2.scid, &dero_asset()),
+        2500,
+        "SC2 still holds 2500"
+    );
 
     // Re-capture the post-swap1 baselines so the swap2 assertions compare
     // against the tree state AFTER swap1 settled (t1 now holds +1500).
@@ -844,19 +1174,45 @@ fn multi_swap_isolation_in_one_balance_tree() {
 
     // Now claim swap 2.
     assert_eq!(
-        c2.call("Claim", vec![
-            ("id".into(), ArgValue::Str("m2".into())),
-            ("preimage".into(), ArgValue::Str(String::from_utf8(p2.to_vec()).unwrap())),
-        ], 0),
+        c2.call(
+            "Claim",
+            vec![
+                ("id".into(), ArgValue::Str("m2".into())),
+                (
+                    "preimage".into(),
+                    ArgValue::Str(String::from_utf8(p2.to_vec()).unwrap())
+                ),
+            ],
+            0
+        ),
         0,
         "claim swap 2"
     );
     c2.settle_external(&mut balance_tree);
     assert_credited(&balance_tree, &t2, &t2_after_s1, 2500, "taker2 after claim");
-    assert_untouched(&balance_tree, &t1, &t1_after_s1, "taker1 untouched by swap2 claim");
-    assert_untouched(&balance_tree, &f1, &f1_after_s1, "funder1 untouched by swap2 claim");
-    assert_untouched(&balance_tree, &f2, &f2_after_s1, "funder2 untouched by swap2 claim");
-    assert_eq!(load_sc_asset_value(&c2.data_tree, &c2.scid, &dero_asset()), 0, "SC2 debited");
+    assert_untouched(
+        &balance_tree,
+        &t1,
+        &t1_after_s1,
+        "taker1 untouched by swap2 claim",
+    );
+    assert_untouched(
+        &balance_tree,
+        &f1,
+        &f1_after_s1,
+        "funder1 untouched by swap2 claim",
+    );
+    assert_untouched(
+        &balance_tree,
+        &f2,
+        &f2_after_s1,
+        "funder2 untouched by swap2 claim",
+    );
+    assert_eq!(
+        load_sc_asset_value(&c2.data_tree, &c2.scid, &dero_asset()),
+        0,
+        "SC2 debited"
+    );
 }
 
 /// Hammer: failed calls (wrong preimage, early refund, attacker refund) must
@@ -876,85 +1232,162 @@ fn failed_calls_do_not_move_value() {
     let hashlock = sha256_hex(preimage);
     let mut ctx = Ctx::new(100); // timeout 10 -> expires at 110
     assert_eq!(
-        ctx.call("CreateSwap", vec![
-            ("id".into(), ArgValue::Str("f1".into())),
-            ("maker".into(), ArgValue::Str(funder.clone())),
-            ("taker".into(), ArgValue::Str(taker.clone())),
-            ("sellToken".into(), ArgValue::Str("DERO".into())),
-            ("sellAmount".into(), ArgValue::U64(1000)),
-            ("buyToken".into(), ArgValue::Str("USDT".into())),
-            ("buyAmount".into(), ArgValue::U64(500)),
-            ("hashlock".into(), ArgValue::Str(hashlock)),
-            ("timeout".into(), ArgValue::U64(10)),
-        ], 0),
+        ctx.call(
+            "CreateSwap",
+            vec![
+                ("id".into(), ArgValue::Str("f1".into())),
+                ("maker".into(), ArgValue::Str(funder.clone())),
+                ("taker".into(), ArgValue::Str(taker.clone())),
+                ("sellToken".into(), ArgValue::Str("DERO".into())),
+                ("sellAmount".into(), ArgValue::U64(1000)),
+                ("buyToken".into(), ArgValue::Str("USDT".into())),
+                ("buyAmount".into(), ArgValue::U64(500)),
+                ("hashlock".into(), ArgValue::Str(hashlock)),
+                ("timeout".into(), ArgValue::U64(10)),
+            ],
+            0
+        ),
         0,
         "create"
     );
     assert_eq!(
-        ctx.call("Fund", vec![
-            ("id".into(), ArgValue::Str("f1".into())),
-            ("funder".into(), ArgValue::Str(funder.clone())),
-        ], 1500),
+        ctx.call(
+            "Fund",
+            vec![
+                ("id".into(), ArgValue::Str("f1".into())),
+                ("funder".into(), ArgValue::Str(funder.clone())),
+            ],
+            1500
+        ),
         0,
         "fund"
     );
 
     // Wrong preimage claim -> reject, no movement.
     assert_eq!(
-        ctx.call("Claim", vec![
-            ("id".into(), ArgValue::Str("f1".into())),
-            ("preimage".into(), ArgValue::Str("wrong".into())),
-        ], 0),
+        ctx.call(
+            "Claim",
+            vec![
+                ("id".into(), ArgValue::Str("f1".into())),
+                ("preimage".into(), ArgValue::Str("wrong".into())),
+            ],
+            0
+        ),
         1,
         "wrong preimage rejects"
     );
     assert!(ctx.transfers().is_empty(), "no payout on wrong preimage");
-    assert_untouched(&balance_tree, &funder, &funder_before, "funder after wrong claim");
-    assert_untouched(&balance_tree, &taker, &taker_before, "taker after wrong claim");
-    assert_eq!(load_sc_asset_value(&ctx.data_tree, &ctx.scid, &dero_asset()), 1500, "SC still holds 1500");
+    assert_untouched(
+        &balance_tree,
+        &funder,
+        &funder_before,
+        "funder after wrong claim",
+    );
+    assert_untouched(
+        &balance_tree,
+        &taker,
+        &taker_before,
+        "taker after wrong claim",
+    );
+    assert_eq!(
+        load_sc_asset_value(&ctx.data_tree, &ctx.scid, &dero_asset()),
+        1500,
+        "SC still holds 1500"
+    );
 
     // Early refund -> reject, no movement.
     assert_eq!(
-        ctx.call("Refund", vec![
-            ("id".into(), ArgValue::Str("f1".into())),
-            ("funder".into(), ArgValue::Str(funder.clone())),
-        ], 0),
+        ctx.call(
+            "Refund",
+            vec![
+                ("id".into(), ArgValue::Str("f1".into())),
+                ("funder".into(), ArgValue::Str(funder.clone())),
+            ],
+            0
+        ),
         1,
         "early refund rejects"
     );
     assert!(ctx.transfers().is_empty(), "no payout on early refund");
-    assert_untouched(&balance_tree, &funder, &funder_before, "funder after early refund");
-    assert_untouched(&balance_tree, &taker, &taker_before, "taker after early refund");
+    assert_untouched(
+        &balance_tree,
+        &funder,
+        &funder_before,
+        "funder after early refund",
+    );
+    assert_untouched(
+        &balance_tree,
+        &taker,
+        &taker_before,
+        "taker after early refund",
+    );
 
     // After timeout, attacker refund -> reject, no movement.
     ctx.bl_height = 120;
     assert_eq!(
-        ctx.call("Refund", vec![
-            ("id".into(), ArgValue::Str("f1".into())),
-            ("funder".into(), ArgValue::Str(attacker.clone())),
-        ], 0),
+        ctx.call(
+            "Refund",
+            vec![
+                ("id".into(), ArgValue::Str("f1".into())),
+                ("funder".into(), ArgValue::Str(attacker.clone())),
+            ],
+            0
+        ),
         1,
         "attacker refund rejects"
     );
     assert!(ctx.transfers().is_empty(), "no payout to attacker");
-    assert_untouched(&balance_tree, &attacker, &attacker_before, "attacker after refund attempt");
-    assert_untouched(&balance_tree, &funder, &funder_before, "funder after attacker attempt");
-    assert_eq!(load_sc_asset_value(&ctx.data_tree, &ctx.scid, &dero_asset()), 1500, "SC still holds 1500");
+    assert_untouched(
+        &balance_tree,
+        &attacker,
+        &attacker_before,
+        "attacker after refund attempt",
+    );
+    assert_untouched(
+        &balance_tree,
+        &funder,
+        &funder_before,
+        "funder after attacker attempt",
+    );
+    assert_eq!(
+        load_sc_asset_value(&ctx.data_tree, &ctx.scid, &dero_asset()),
+        1500,
+        "SC still holds 1500"
+    );
 
     // The real funder can still refund and recovers the value.
     assert_eq!(
-        ctx.call("Refund", vec![
-            ("id".into(), ArgValue::Str("f1".into())),
-            ("funder".into(), ArgValue::Str(funder.clone())),
-        ], 0),
+        ctx.call(
+            "Refund",
+            vec![
+                ("id".into(), ArgValue::Str("f1".into())),
+                ("funder".into(), ArgValue::Str(funder.clone())),
+            ],
+            0
+        ),
         0,
         "funder refund succeeds"
     );
     ctx.settle_external(&mut balance_tree);
-    assert_credited(&balance_tree, &funder, &funder_before, 1500, "funder refund");
+    assert_credited(
+        &balance_tree,
+        &funder,
+        &funder_before,
+        1500,
+        "funder refund",
+    );
     assert_untouched(&balance_tree, &taker, &taker_before, "taker after refund");
-    assert_untouched(&balance_tree, &attacker, &attacker_before, "attacker after refund");
-    assert_eq!(load_sc_asset_value(&ctx.data_tree, &ctx.scid, &dero_asset()), 0, "SC debited");
+    assert_untouched(
+        &balance_tree,
+        &attacker,
+        &attacker_before,
+        "attacker after refund",
+    );
+    assert_eq!(
+        load_sc_asset_value(&ctx.data_tree, &ctx.scid, &dero_asset()),
+        0,
+        "SC debited"
+    );
 }
 
 /// Hammer: conservation — the value that leaves the SC's stored balance must
@@ -972,25 +1405,33 @@ fn value_is_conserved_sc_debit_equals_recipient_credit() {
     let hashlock = sha256_hex(preimage);
     let mut ctx = Ctx::new(100);
     assert_eq!(
-        ctx.call("CreateSwap", vec![
-            ("id".into(), ArgValue::Str("c1".into())),
-            ("maker".into(), ArgValue::Str(funder.clone())),
-            ("taker".into(), ArgValue::Str(taker.clone())),
-            ("sellToken".into(), ArgValue::Str("DERO".into())),
-            ("sellAmount".into(), ArgValue::U64(1000)),
-            ("buyToken".into(), ArgValue::Str("USDT".into())),
-            ("buyAmount".into(), ArgValue::U64(500)),
-            ("hashlock".into(), ArgValue::Str(hashlock)),
-            ("timeout".into(), ArgValue::U64(50)),
-        ], 0),
+        ctx.call(
+            "CreateSwap",
+            vec![
+                ("id".into(), ArgValue::Str("c1".into())),
+                ("maker".into(), ArgValue::Str(funder.clone())),
+                ("taker".into(), ArgValue::Str(taker.clone())),
+                ("sellToken".into(), ArgValue::Str("DERO".into())),
+                ("sellAmount".into(), ArgValue::U64(1000)),
+                ("buyToken".into(), ArgValue::Str("USDT".into())),
+                ("buyAmount".into(), ArgValue::U64(500)),
+                ("hashlock".into(), ArgValue::Str(hashlock)),
+                ("timeout".into(), ArgValue::U64(50)),
+            ],
+            0
+        ),
         0,
         "create"
     );
     assert_eq!(
-        ctx.call("Fund", vec![
-            ("id".into(), ArgValue::Str("c1".into())),
-            ("funder".into(), ArgValue::Str(funder.clone())),
-        ], 1500),
+        ctx.call(
+            "Fund",
+            vec![
+                ("id".into(), ArgValue::Str("c1".into())),
+                ("funder".into(), ArgValue::Str(funder.clone())),
+            ],
+            1500
+        ),
         0,
         "fund"
     );
@@ -998,10 +1439,17 @@ fn value_is_conserved_sc_debit_equals_recipient_credit() {
     assert_eq!(sc_before, 1500, "SC holds the funded value");
 
     assert_eq!(
-        ctx.call("Claim", vec![
-            ("id".into(), ArgValue::Str("c1".into())),
-            ("preimage".into(), ArgValue::Str(String::from_utf8(preimage.to_vec()).unwrap())),
-        ], 0),
+        ctx.call(
+            "Claim",
+            vec![
+                ("id".into(), ArgValue::Str("c1".into())),
+                (
+                    "preimage".into(),
+                    ArgValue::Str(String::from_utf8(preimage.to_vec()).unwrap())
+                ),
+            ],
+            0
+        ),
         0,
         "claim"
     );
@@ -1012,7 +1460,13 @@ fn value_is_conserved_sc_debit_equals_recipient_credit() {
     assert_eq!(sc_debit, 1500, "SC debited exactly the funded value");
 
     // The recipient's balance-tree entry grew by exactly the SC debit.
-    assert_credited(&balance_tree, &taker, &taker_before, sc_debit, "taker credit == SC debit");
+    assert_credited(
+        &balance_tree,
+        &taker,
+        &taker_before,
+        sc_debit,
+        "taker credit == SC debit",
+    );
     // Funder is untouched by the SC external leg (their debit is the ring leg).
     assert_untouched(&balance_tree, &funder, &funder_before, "funder after claim");
 }

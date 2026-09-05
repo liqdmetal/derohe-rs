@@ -99,7 +99,8 @@ impl Statement {
         pos += n;
 
         need(buf, pos, 33)?;
-        let d = decode_compressed(&buf[pos..pos + 33]).map_err(|e| format!("statement D: {}", e))?;
+        let d =
+            decode_compressed(&buf[pos..pos + 33]).map_err(|e| format!("statement D: {}", e))?;
         pos += 33;
 
         let pointer_len = ring_size * bpp as usize;
@@ -182,7 +183,9 @@ mod tests {
     fn statement_roundtrip() {
         use ark_ff::PrimeField;
         let g = base_g();
-        let pks: Vec<G1Projective> = (0..4).map(|i| g.mul_bigint(ark_bn254::Fr::from(i + 1).into_bigint())).collect();
+        let pks: Vec<G1Projective> = (0..4)
+            .map(|i| g.mul_bigint(ark_bn254::Fr::from(i + 1).into_bigint()))
+            .collect();
         let st = Statement {
             publickeylist: pks.clone(),
             c: pks.clone(),

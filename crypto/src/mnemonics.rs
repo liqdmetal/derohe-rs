@@ -67,9 +67,7 @@ pub fn words_to_key(words: &[String]) -> Result<[u8; 32], String> {
         let w1 = indices[i * 3];
         let w2 = indices[i * 3 + 1];
         let w3 = indices[i * 3 + 2];
-        let val = w1
-            + l * (((l - w1) + w2) % l)
-            + l * l * (((l - w2) + w3) % l);
+        let val = w1 + l * (((l - w1) + w2) % l) + l * l * (((l - w2) + w3) % l);
         let value_32bit = val as u32; // Go: uint32(val)
         key[i * 4..i * 4 + 4].copy_from_slice(&value_32bit.to_le_bytes());
     }

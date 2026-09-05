@@ -18,7 +18,13 @@ pub fn encrypt_with_password(password: &[u8], data: &[u8]) -> Result<Vec<u8>, St
     let mut nonce = [0u8; 24];
     getrandom::getrandom(&mut nonce).map_err(|e| format!("rng: {e}"))?;
     let ct = cipher
-        .encrypt(&nonce.into(), Payload { msg: data, aad: b"" })
+        .encrypt(
+            &nonce.into(),
+            Payload {
+                msg: data,
+                aad: b"",
+            },
+        )
         .map_err(|e| format!("encrypt: {e}"))?;
     let mut out = ct;
     out.extend_from_slice(&nonce);

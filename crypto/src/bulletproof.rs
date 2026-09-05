@@ -15,8 +15,8 @@
 
 use ark_bn254::{Fr, G1Projective};
 use ark_ec::PrimeGroup;
-use ark_ff::{Field, PrimeField};
 use ark_ff::fields::AdditiveGroup;
+use ark_ff::{Field, PrimeField};
 
 use crate::curve::{decode_compressed, encode_compressed, encode_uncompressed};
 use crate::elgamal::ElGamal;
@@ -43,7 +43,11 @@ impl RandSource {
         assert!(self.0.len() >= 32, "randomness exhausted");
         let v = fr_from_be_bytes(&self.0[..32]);
         self.0.drain(..32);
-        if v == Fr::ZERO { Fr::ONE } else { v }
+        if v == Fr::ZERO {
+            Fr::ONE
+        } else {
+            v
+        }
     }
 }
 
@@ -107,7 +111,12 @@ pub struct Proof {
 // Helpers (mirror the Go package functions)
 // ---------------------------------------------------------------------------
 
-fn pedersen_vector_commit(p: &PedersenParams, gv: &FieldVector, hv: &FieldVector, r: Fr) -> G1Projective {
+fn pedersen_vector_commit(
+    p: &PedersenParams,
+    gv: &FieldVector,
+    hv: &FieldVector,
+    r: Fr,
+) -> G1Projective {
     let mut point = p.h.mul_bigint(r.into_bigint());
     for (gi, g) in p.gs.iter().zip(&gv.0) {
         point += gi.mul_bigint(fr_from_be_bytes(g).into_bigint());
@@ -146,7 +155,10 @@ fn elgamal_multiexp(e: &[ElGamal], exps: &FieldVector) -> ElGamal {
     let mut acc = ElGamal::new(G1Projective::ZERO, G1Projective::ZERO);
     for (ei, x) in e.iter().zip(&exps.0) {
         let f = fr_from_be_bytes(x);
-        acc = acc.add(&ElGamal::new(ei.left.mul_bigint(f.into_bigint()), ei.right.mul_bigint(f.into_bigint())));
+        acc = acc.add(&ElGamal::new(
+            ei.left.mul_bigint(f.into_bigint()),
+            ei.right.mul_bigint(f.into_bigint()),
+        ));
     }
     acc
 }
@@ -155,7 +167,13 @@ fn elgamal_multiexp(e: &[ElGamal], exps: &FieldVector) -> ElGamal {
 /// equivalent to Go's reverse(fmt.Sprintf("%0*m%0*m", m, i1, m, i0)).
 fn witness_bits(i0: usize, i1: usize, m: usize) -> Vec<bool> {
     (0..2 * m)
-        .map(|i| if i < m { ((i0 >> i) & 1) == 1 } else { ((i1 >> (i - m)) & 1) == 1 })
+        .map(|i| {
+            if i < m {
+                ((i0 >> i) & 1) == 1
+            } else {
+                ((i1 >> (i - m)) & 1) == 1
+            }
+        })
         .collect()
 }
 
@@ -250,7 +268,15 @@ pub fn generate_proof(
 
     // 128-bit range: number = balance << 64 | transfer, LSB-first bits.
     let number = ((w.balance as u128) << 64) | (w.transfer_amount as u128);
-    let al: Vec<Fr> = (0..128).map(|i| if (number >> i) & 1 == 1 { Fr::ONE } else { Fr::ZERO }).collect();
+    let al: Vec<Fr> = (0..128)
+        .map(|i| {
+            if (number >> i) & 1 == 1 {
+                Fr::ONE
+            } else {
+                Fr::ZERO
+            }
+        })
+        .collect();
     let ar: Vec<Fr> = al.iter().map(|b| *b - Fr::ONE).collect();
     let al_fv = FieldVector::new(al.iter().map(|f| fr_to_be_bytes(*f)).collect());
     let ar_fv = FieldVector::new(ar.iter().map(|f| fr_to_be_bytes(*f)).collect());
@@ -263,10 +289,18 @@ pub fn generate_proof(
     let s_r: Vec<[u8; 32]> = (0..128).map(|_| fr_to_be_bytes(rng.next())).collect();
     let bs_rand = rng.next();
     let ba = pedersen_vector_commit(&params, &al_fv, &ar_fv, ba_rand);
-    let bs = pedersen_vector_commit(&params, &FieldVector::new(s_l.clone()), &FieldVector::new(s_r.clone()), bs_rand);
+    let bs = pedersen_vector_commit(
+        &params,
+        &FieldVector::new(s_l.clone()),
+        &FieldVector::new(s_r.clone()),
+        bs_rand,
+    );
 
     let n = s.publickeylist.len();
-    assert!(n >= 2 && n.is_power_of_two(), "publickeylist must be a power of 2");
+    assert!(
+        n >= 2 && n.is_power_of_two(),
+        "publickeylist must be a power of 2"
+    );
     let m = (n as f64).log2() as usize;
 
     // aa (len 2m): aa[0]=aa[m]=0; Go draws only the 2m-2 other positions
@@ -282,12 +316,20 @@ pub fn generate_proof(
         }
     }
     let bits = witness_bits(w.index[0], w.index[1], m);
-    let ba_bits: Vec<Fr> = bits.iter().map(|b| if *b { Fr::ONE } else { Fr::ZERO }).collect();
-    let bspecial: Vec<Fr> = bits.iter().map(|b| if *b { -Fr::ONE } else { Fr::ONE }).collect();
+    let ba_bits: Vec<Fr> = bits
+        .iter()
+        .map(|b| if *b { Fr::ONE } else { Fr::ZERO })
+        .collect();
+    let bspecial: Vec<Fr> = bits
+        .iter()
+        .map(|b| if *b { -Fr::ONE } else { Fr::ONE })
+        .collect();
 
     let a = FieldVector::new(aa.iter().map(|f| fr_to_be_bytes(*f)).collect());
     let b = FieldVector::new(ba_bits.iter().map(|f| fr_to_be_bytes(*f)).collect());
-    let c_vec = a.hadamard(&FieldVector::new(bspecial.iter().map(|f| fr_to_be_bytes(*f)).collect()));
+    let c_vec = a.hadamard(&FieldVector::new(
+        bspecial.iter().map(|f| fr_to_be_bytes(*f)).collect(),
+    ));
     let d_vec = a.hadamard(&a).negate();
     let a0am = a.element_fr(0) * a.element_fr(m);
     let e = FieldVector::new(vec![fr_to_be_bytes(a0am), fr_to_be_bytes(a0am)]);
@@ -304,7 +346,14 @@ pub fn generate_proof(
     let proof_b = pedersen_vector_commit(&params, &b, &c_vec.concat(&f_vec), b_rand);
 
     let v = reduced_hash(
-        &[fr_to_be_bytes(statementhash).as_slice(), &encode_uncompressed(&ba), &encode_uncompressed(&bs), &encode_uncompressed(&proof_a), &encode_uncompressed(&proof_b)].concat(),
+        &[
+            fr_to_be_bytes(statementhash).as_slice(),
+            &encode_uncompressed(&ba),
+            &encode_uncompressed(&bs),
+            &encode_uncompressed(&proof_a),
+            &encode_uncompressed(&proof_b),
+        ]
+        .concat(),
     );
 
     // RecursivePolynomials matrices, transposed (P[i][j] = Pi[j][i])
@@ -353,7 +402,9 @@ pub fn generate_proof(
     }
 
     // C_XG: m ElGamal commits to C[0].Right (= D), value 0, then the vPow loop
-    let mut c_xg: Vec<ElGamal> = (0..m).map(|_| elgamal_commit(&c_pairs[0].right, Fr::ZERO, rng.next()).0).collect();
+    let mut c_xg: Vec<ElGamal> = (0..m)
+        .map(|_| elgamal_commit(&c_pairs[0].right, Fr::ZERO, rng.next()).0)
+        .collect();
     let mut v_pow = Fr::ONE;
     for i in 0..n {
         let poly: &Vec<Vec<Fr>> = if i % 2 == 0 { &p_mat } else { &q_mat };
@@ -390,18 +441,36 @@ pub fn generate_proof(
         y_xgv.push(c_xg[i].right);
     }
 
-    let w_chal = hashmash1(v, &[&clng, &crng, &c_0gv, &dgv, &y_0gv, &ggv, &c_xgv, &y_xgv]);
+    let w_chal = hashmash1(
+        v,
+        &[&clng, &crng, &c_0gv, &dgv, &y_0gv, &ggv, &c_xgv, &y_xgv],
+    );
 
     // f = b*w + a; z_A = B_rand*w + A_rand (Go: proof_B_internal.Randomness, NOT BS)
     let f_fv = b.times(w_chal).add(&a);
     let z_a = b_rand * w_chal + a_rand;
 
     let y = reduced_hash(&fr_to_be_bytes(w_chal));
-    let ys: Vec<Fr> = (0..128).scan(Fr::ONE, |acc, _| { let cur = *acc; *acc *= y; Some(cur) }).collect();
+    let ys: Vec<Fr> = (0..128)
+        .scan(Fr::ONE, |acc, _| {
+            let cur = *acc;
+            *acc *= y;
+            Some(cur)
+        })
+        .collect();
     let z = reduced_hash(&fr_to_be_bytes(y));
     let zs = vec![z * z, z * z * z];
-    let twos: Vec<Fr> = (0..64).scan(Fr::ONE, |acc, _| { let cur = *acc; *acc *= Fr::from(2u64); Some(cur) }).collect();
-    let two_times_zs: Vec<Fr> = zs.iter().flat_map(|zi| twos.iter().map(move |t| *zi * *t)).collect();
+    let twos: Vec<Fr> = (0..64)
+        .scan(Fr::ONE, |acc, _| {
+            let cur = *acc;
+            *acc *= Fr::from(2u64);
+            Some(cur)
+        })
+        .collect();
+    let two_times_zs: Vec<Fr> = zs
+        .iter()
+        .flat_map(|zi| twos.iter().map(move |t| *zi * *t))
+        .collect();
 
     let ys_fv = FieldVector::new(ys.iter().map(|f| fr_to_be_bytes(*f)).collect());
     let tmp = al_fv.add_constant(-z);
@@ -412,7 +481,9 @@ pub fn generate_proof(
         coefficients: vec![
             ys_fv
                 .hadamard(&ar_fv.add_constant(z))
-                .add(&FieldVector::new(two_times_zs.iter().map(|f| fr_to_be_bytes(*f)).collect())),
+                .add(&FieldVector::new(
+                    two_times_zs.iter().map(|f| fr_to_be_bytes(*f)).collect(),
+                )),
             FieldVector::new(s_r).hadamard(&ys_fv),
         ],
     };
@@ -423,7 +494,14 @@ pub fn generate_proof(
     let t_1 = pedersen_commit_scalar(&params.g, &params.h, t_coeffs[1], t1_rand);
     let t_2 = pedersen_commit_scalar(&params.g, &params.h, t_coeffs[2], t2_rand);
 
-    let x = reduced_hash(&[fr_to_be_bytes(z).as_slice(), &encode_uncompressed(&t_1), &encode_uncompressed(&t_2)].concat());
+    let x = reduced_hash(
+        &[
+            fr_to_be_bytes(z).as_slice(),
+            &encode_uncompressed(&t_1),
+            &encode_uncompressed(&t_2),
+        ]
+        .concat(),
+    );
     let xsquare = x * x;
     let that = t_coeffs[0] + t_coeffs[1] * x + t_coeffs[2] * xsquare;
     let tau_x = t1_rand * x + t2_rand * xsquare;
@@ -450,13 +528,20 @@ pub fn generate_proof(
         w_pow *= w_chal;
     }
     cnr_r += cn[w.index[0]].right.mul_bigint(w_pow.into_bigint());
-    let dr = c_pairs[0].right.mul_bigint(w_pow.into_bigint()) + g.mul_bigint((-chi_bigint).into_bigint());
+    let dr = c_pairs[0].right.mul_bigint(w_pow.into_bigint())
+        + g.mul_bigint((-chi_bigint).into_bigint());
     let gr = g.mul_bigint((w_pow - psi_bigint).into_bigint());
     p_vec[w.index[0]] += w_pow;
     q_vec[w.index[1]] += w_pow;
 
-    let y_p = fft::convolution(&FieldVector::new(p_vec.iter().map(|f| fr_to_be_bytes(*f)).collect()), &PointVector::new(s.publickeylist.clone()));
-    let y_q = fft::convolution(&FieldVector::new(q_vec.iter().map(|f| fr_to_be_bytes(*f)).collect()), &PointVector::new(s.publickeylist.clone()));
+    let y_p = fft::convolution(
+        &FieldVector::new(p_vec.iter().map(|f| fr_to_be_bytes(*f)).collect()),
+        &PointVector::new(s.publickeylist.clone()),
+    );
+    let y_q = fft::convolution(
+        &FieldVector::new(q_vec.iter().map(|f| fr_to_be_bytes(*f)).collect()),
+        &PointVector::new(s.publickeylist.clone()),
+    );
 
     let mut v_pow2 = Fr::ONE;
     let mut y_xr = G1Projective::ZERO;
@@ -480,7 +565,8 @@ pub fn generate_proof(
     let a_d = g.mul_bigint(k_r.into_bigint());
     let mut a_b = g.mul_bigint(k_b.into_bigint());
     // d1 = (DR * -zs[0] + CnR_right * zs[1]) * k_sk
-    let d1 = (dr.mul_bigint((-zs[0]).into_bigint()) + cnr_r.mul_bigint(zs[1].into_bigint())).mul_bigint(k_sk.into_bigint());
+    let d1 = (dr.mul_bigint((-zs[0]).into_bigint()) + cnr_r.mul_bigint(zs[1].into_bigint()))
+        .mul_bigint(k_sk.into_bigint());
     a_b += d1;
     let a_x = c_xr_r.mul_bigint(k_r.into_bigint());
     let a_t = g.mul_bigint((-k_b).into_bigint()) + params.h.mul_bigint(k_tau.into_bigint());
@@ -489,23 +575,43 @@ pub fn generate_proof(
     u_input.extend_from_slice(&s.roothash);
     u_input.extend_from_slice(scid);
     u_input.extend_from_slice(scid_index.to_string().as_bytes());
-    let a_u = crate::hash_to_point::hash_to_point(&keccak256(&u_input)).mul_bigint(k_sk.into_bigint());
+    let a_u =
+        crate::hash_to_point::hash_to_point(&keccak256(&u_input)).mul_bigint(k_sk.into_bigint());
 
     let c_chal = reduced_hash(
-        &[fr_to_be_bytes(x).as_slice(), &encode_uncompressed(&a_y), &encode_uncompressed(&a_d), &encode_uncompressed(&a_b), &encode_uncompressed(&a_x), &encode_uncompressed(&a_t), &encode_uncompressed(&a_u)].concat(),
+        &[
+            fr_to_be_bytes(x).as_slice(),
+            &encode_uncompressed(&a_y),
+            &encode_uncompressed(&a_d),
+            &encode_uncompressed(&a_b),
+            &encode_uncompressed(&a_x),
+            &encode_uncompressed(&a_t),
+            &encode_uncompressed(&a_u),
+        ]
+        .concat(),
     );
 
     let s_sk = c_chal * w.secret_key + k_sk;
     let s_r = c_chal * w.r + k_r;
-    let w_tmp = (Fr::from(w.transfer_amount as u64) * zs[0] + Fr::from(w.balance as u64) * zs[1]) * w_pow * c_chal;
+    let w_tmp = (Fr::from(w.transfer_amount as u64) * zs[0] + Fr::from(w.balance as u64) * zs[1])
+        * w_pow
+        * c_chal;
     let s_b = w_tmp + k_b;
     let s_tau = tau_x * w_pow * c_chal + k_tau;
 
     let o = reduced_hash(&fr_to_be_bytes(c_chal));
 
     // ---- inner-product argument (folded basis) ---------------------------
-    let ys_inv: Vec<Fr> = ys.iter().map(|y| y.inverse().expect("y invertible")).collect();
-    let hs_prime: Vec<G1Projective> = params.hs.iter().zip(&ys_inv).map(|(h, yi)| h.mul_bigint(yi.into_bigint())).collect();
+    let ys_inv: Vec<Fr> = ys
+        .iter()
+        .map(|y| y.inverse().expect("y invertible"))
+        .collect();
+    let hs_prime: Vec<G1Projective> = params
+        .hs
+        .iter()
+        .zip(&ys_inv)
+        .map(|(h, yi)| h.mul_bigint(yi.into_bigint()))
+        .collect();
     let u_prime = params.h.mul_bigint(o.into_bigint());
     let base_prime = PedersenParams {
         g: params.g,
@@ -516,16 +622,39 @@ pub fn generate_proof(
     };
     let gvalues = l_poly.evaluate(x);
     let hvalues = r_poly.evaluate(x);
-    let ip = innerproduct::generate(&base_prime, &G1Projective::ZERO, &gvalues, &hvalues, &fr_to_be_bytes(o));
+    let ip = innerproduct::generate(
+        &base_prime,
+        &G1Projective::ZERO,
+        &gvalues,
+        &hvalues,
+        &fr_to_be_bytes(o),
+    );
 
     Proof {
-        ba, bs,
-        a: proof_a, b: proof_b,
-        clng, crng, c_0g: c_0gv, dg: dgv, y_0g: y_0gv, gg: ggv,
-        c_xg: c_xgv, y_xg: y_xgv,
+        ba,
+        bs,
+        a: proof_a,
+        b: proof_b,
+        clng,
+        crng,
+        c_0g: c_0gv,
+        dg: dgv,
+        y_0g: y_0gv,
+        gg: ggv,
+        c_xg: c_xgv,
+        y_xg: y_xgv,
         u: *u,
-        f: f_fv, z_a, t_1, t_2, that, mu,
-        c: c_chal, s_sk, s_r, s_b, s_tau,
+        f: f_fv,
+        z_a,
+        t_1,
+        t_2,
+        that,
+        mu,
+        c: c_chal,
+        s_sk,
+        s_r,
+        s_b,
+        s_tau,
         ip,
     }
 }
@@ -648,9 +777,36 @@ pub fn deserialize(b: &[u8], m: usize) -> Result<Proof, String> {
         rs.push(pt(take(33)?, &format!("R[{}]", i))?);
     }
     Ok(Proof {
-        ba, bs, a, b, clng, crng, c_0g, dg, y_0g, gg, c_xg, y_xg, u,
-        f, z_a, t_1, t_2, that, mu, c, s_sk, s_r, s_b, s_tau,
-        ip: innerproduct::InnerProduct { a: ip_a, b: ip_b, ls, rs },
+        ba,
+        bs,
+        a,
+        b,
+        clng,
+        crng,
+        c_0g,
+        dg,
+        y_0g,
+        gg,
+        c_xg,
+        y_xg,
+        u,
+        f,
+        z_a,
+        t_1,
+        t_2,
+        that,
+        mu,
+        c,
+        s_sk,
+        s_r,
+        s_b,
+        s_tau,
+        ip: innerproduct::InnerProduct {
+            a: ip_a,
+            b: ip_b,
+            ls,
+            rs,
+        },
     })
 }
 
@@ -678,9 +834,28 @@ pub fn verify(
 
     let statementhash = reduced_hash(txid);
     let v = reduced_hash(
-        &[fr_to_be_bytes(statementhash).as_slice(), &encode_uncompressed(&proof.ba), &encode_uncompressed(&proof.bs), &encode_uncompressed(&proof.a), &encode_uncompressed(&proof.b)].concat(),
+        &[
+            fr_to_be_bytes(statementhash).as_slice(),
+            &encode_uncompressed(&proof.ba),
+            &encode_uncompressed(&proof.bs),
+            &encode_uncompressed(&proof.a),
+            &encode_uncompressed(&proof.b),
+        ]
+        .concat(),
     );
-    let w_chal = hashmash1(v, &[&proof.clng, &proof.crng, &proof.c_0g, &proof.dg, &proof.y_0g, &proof.gg, &proof.c_xg, &proof.y_xg]);
+    let w_chal = hashmash1(
+        v,
+        &[
+            &proof.clng,
+            &proof.crng,
+            &proof.c_0g,
+            &proof.dg,
+            &proof.y_0g,
+            &proof.gg,
+            &proof.c_xg,
+            &proof.y_xg,
+        ],
+    );
 
     let m = proof.f.length() / 2;
     let n = 1usize << m;
@@ -764,7 +939,13 @@ pub fn verify(
 
     // protocol support: y, ys, k, z, zs, delta
     let y = reduced_hash(&fr_to_be_bytes(w_chal));
-    let ys: Vec<Fr> = (0..128).scan(Fr::ONE, |acc, _| { let cur = *acc; *acc *= y; Some(cur) }).collect();
+    let ys: Vec<Fr> = (0..128)
+        .scan(Fr::ONE, |acc, _| {
+            let cur = *acc;
+            *acc *= y;
+            Some(cur)
+        })
+        .collect();
     let mut k = ys.iter().fold(Fr::ZERO, |acc, v| acc + *v); // Σ ys[i] (ys[0]=1 included)
     let z = reduced_hash(&fr_to_be_bytes(y));
     let zs = vec![z * z, z * z * z];
@@ -782,7 +963,14 @@ pub fn verify(
         two_times_zs[64 + i] = zs[1] * Fr::from(1u64 << i);
     }
 
-    let x = reduced_hash(&[fr_to_be_bytes(z).as_slice(), &encode_uncompressed(&proof.t_1), &encode_uncompressed(&proof.t_2)].concat());
+    let x = reduced_hash(
+        &[
+            fr_to_be_bytes(z).as_slice(),
+            &encode_uncompressed(&proof.t_1),
+            &encode_uncompressed(&proof.t_2),
+        ]
+        .concat(),
+    );
     let xsq = x * x;
     let t_eval = proof.t_1.mul_bigint(x.into_bigint()) + proof.t_2.mul_bigint(xsq.into_bigint());
 
@@ -792,13 +980,16 @@ pub fn verify(
     let a_y = gr.mul_bigint(proof.s_sk.into_bigint()) + yr00.mul_bigint(c_neg.into_bigint());
     let a_d = g.mul_bigint(proof.s_r.into_bigint()) + s.d.mul_bigint(c_neg.into_bigint());
     let zs0_neg = -zs[0];
-    let left = (dr.mul_bigint(zs0_neg.into_bigint()) + crn_r.mul_bigint(zs[1].into_bigint())).mul_bigint(proof.s_sk.into_bigint());
+    let left = (dr.mul_bigint(zs0_neg.into_bigint()) + crn_r.mul_bigint(zs[1].into_bigint()))
+        .mul_bigint(proof.s_sk.into_bigint());
     let mid = g.mul_bigint((Fr::from(total_open_value as u64) * w_pow).into_bigint()) + cr00;
-    let right = (mid.mul_bigint(zs0_neg.into_bigint()) + cln_r.mul_bigint(zs[1].into_bigint())).mul_bigint(c_neg.into_bigint());
+    let right = (mid.mul_bigint(zs0_neg.into_bigint()) + cln_r.mul_bigint(zs[1].into_bigint()))
+        .mul_bigint(c_neg.into_bigint());
     let a_b = g.mul_bigint(proof.s_b.into_bigint()) + left + right;
     let a_x = y_xr.mul_bigint(proof.s_r.into_bigint()) + c_xr.mul_bigint(c_neg.into_bigint());
     let s_b_neg = -proof.s_b;
-    let mut a_t = (g.mul_bigint(t.into_bigint()) - t_eval).mul_bigint((proof.c * w_pow).into_bigint());
+    let mut a_t =
+        (g.mul_bigint(t.into_bigint()) - t_eval).mul_bigint((proof.c * w_pow).into_bigint());
     a_t += params.h.mul_bigint(proof.s_tau.into_bigint());
     a_t += g.mul_bigint(s_b_neg.into_bigint());
 
@@ -806,12 +997,22 @@ pub fn verify(
     u_input.extend_from_slice(&s.roothash);
     u_input.extend_from_slice(scid);
     u_input.extend_from_slice(scid_index.to_string().as_bytes());
-    let a_u = crate::hash_to_point::hash_to_point(&keccak256(&u_input)).mul_bigint(proof.s_sk.into_bigint())
+    let a_u = crate::hash_to_point::hash_to_point(&keccak256(&u_input))
+        .mul_bigint(proof.s_sk.into_bigint())
         + proof.u.mul_bigint(c_neg.into_bigint());
 
     // challenge consistency: c must equal reducedhash(x || A_y || ...)
     let c_check = reduced_hash(
-        &[fr_to_be_bytes(x).as_slice(), &encode_uncompressed(&a_y), &encode_uncompressed(&a_d), &encode_uncompressed(&a_b), &encode_uncompressed(&a_x), &encode_uncompressed(&a_t), &encode_uncompressed(&a_u)].concat(),
+        &[
+            fr_to_be_bytes(x).as_slice(),
+            &encode_uncompressed(&a_y),
+            &encode_uncompressed(&a_d),
+            &encode_uncompressed(&a_b),
+            &encode_uncompressed(&a_x),
+            &encode_uncompressed(&a_t),
+            &encode_uncompressed(&a_u),
+        ]
+        .concat(),
     );
     if c_check != proof.c {
         return false;
@@ -820,8 +1021,16 @@ pub fn verify(
     // inner-product check
     let o = reduced_hash(&fr_to_be_bytes(proof.c));
     let u_x = params.h.mul_bigint(o.into_bigint());
-    let ys_inv: Vec<Fr> = ys.iter().map(|yi| yi.inverse().expect("y invertible")).collect();
-    let hs_prime: Vec<G1Projective> = params.hs.iter().zip(&ys_inv).map(|(h, yi)| h.mul_bigint(yi.into_bigint())).collect();
+    let ys_inv: Vec<Fr> = ys
+        .iter()
+        .map(|yi| yi.inverse().expect("y invertible"))
+        .collect();
+    let hs_prime: Vec<G1Projective> = params
+        .hs
+        .iter()
+        .zip(&ys_inv)
+        .map(|(h, yi)| h.mul_bigint(yi.into_bigint()))
+        .collect();
     let mut h_prime_sum = G1Projective::ZERO;
     for i in 0..128 {
         h_prime_sum += hs_prime[i].mul_bigint((ys[i] * z + two_times_zs[i]).into_bigint());
@@ -871,7 +1080,10 @@ pub fn debug_prefix(s: &Statement, w: &Witness, rand_bytes: &[u8]) -> serde_json
         }
     }
     let bits = witness_bits(w.index[0], w.index[1], m);
-    let ba: Vec<Fr> = bits.iter().map(|b| if *b { Fr::ONE } else { Fr::ZERO }).collect();
+    let ba: Vec<Fr> = bits
+        .iter()
+        .map(|b| if *b { Fr::ONE } else { Fr::ZERO })
+        .collect();
     let a_frs: Vec<Fr> = aa;
     let b_frs: Vec<Fr> = ba;
     let pi = recursive_polynomials(&Polynomial::new(None), &a_frs[..m], &b_frs[..m]);

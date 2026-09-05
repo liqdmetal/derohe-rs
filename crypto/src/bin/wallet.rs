@@ -4,17 +4,19 @@
 //! transfer, and broadcast it to the daemon. End-to-end proof that the
 //! Rust implementation can spend on a live DERO network.
 
+use ark_bn254::Fr;
+use ark_ec::PrimeGroup;
+use ark_ff::PrimeField;
 use dero_crypto::bulletproof::verify;
 use dero_crypto::curve::encode_compressed;
 use dero_crypto::elgamal::ElGamal;
 use dero_crypto::hash_to_point::base_g;
 use dero_crypto::mnemonics::words_to_key;
 use dero_crypto::rpc_addr::address_to_compressed;
-use dero_crypto::rpc_args::{Argument, ArgValue, Arguments, DATA_HASH, DATA_STRING, DATA_UINT64, SC_ACTION, SC_CODE};
+use dero_crypto::rpc_args::{
+    ArgValue, Argument, Arguments, DATA_HASH, DATA_STRING, DATA_UINT64, SC_ACTION, SC_CODE,
+};
 use dero_crypto::tx_builder::{build_transaction, RingMember, Transfer};
-use ark_bn254::Fr;
-use ark_ec::PrimeGroup;
-use ark_ff::PrimeField;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -28,15 +30,31 @@ fn main() {
     let sc_install = args.len() >= 5 && args[2] == "--sc-install";
     let sc_call = args.len() >= 6 && args[2] == "--sc-call";
     let burn = args.len() >= 5 && args[2] == "--burn";
-    let dest = if sc_install || sc_call { String::new() } else if burn { args[3].clone() } else { args[2].clone() };
-    let amount: u64 = if sc_install || sc_call { 0 } else if burn { args[4].parse().expect("amount") } else { args[3].parse().expect("amount") };
+    let dest = if sc_install || sc_call {
+        String::new()
+    } else if burn {
+        args[3].clone()
+    } else {
+        args[2].clone()
+    };
+    let amount: u64 = if sc_install || sc_call {
+        0
+    } else if burn {
+        args[4].parse().expect("amount")
+    } else {
+        args[3].parse().expect("amount")
+    };
     // --sc-call <scid> <entrypoint> [--arg k=v ...] <daemon>
     let (sc_scid, sc_entrypoint) = if sc_call {
         (args[3].clone(), args[4].clone())
     } else {
         (String::new(), String::new())
     };
-    let sc_code = if sc_install { args[3].clone() } else { String::new() };
+    let sc_code = if sc_install {
+        args[3].clone()
+    } else {
+        String::new()
+    };
     // SC-call extra args: --arg <name>=<value> pairs. Uint64 if the value
     // parses as a number, else String.
     let mut sc_args: Vec<(String, ArgValue)> = Vec::new();
@@ -53,7 +71,13 @@ fn main() {
             if let Some((k, v)) = args[i + 1].split_once('=') {
                 // names hinting at a token/scid/hash are always strings
                 let kl = k.to_ascii_lowercase();
-                let is_hash_like = kl.contains("token") || kl.contains("scid") || kl.contains("hash") || kl.contains("id") || kl.contains("maker") || kl.contains("taker") || kl.contains("addr");
+                let is_hash_like = kl.contains("token")
+                    || kl.contains("scid")
+                    || kl.contains("hash")
+                    || kl.contains("id")
+                    || kl.contains("maker")
+                    || kl.contains("taker")
+                    || kl.contains("addr");
                 let val = if !is_hash_like {
                     if let Ok(vu) = v.parse::<u64>() {
                         ArgValue::U64(vu)
@@ -81,8 +105,13 @@ fn main() {
     }
 
     // 1. derive the wallet keys
-    let seed = words_to_key(&words.split_whitespace().map(|w| w.to_string()).collect::<Vec<_>>())
-        .expect("words_to_key");
+    let seed = words_to_key(
+        &words
+            .split_whitespace()
+            .map(|w| w.to_string())
+            .collect::<Vec<_>>(),
+    )
+    .expect("words_to_key");
     let mut le = [0u8; 32];
     for i in 0..32 {
         le[i] = seed[31 - i];
@@ -97,7 +126,11 @@ fn main() {
         .get("result")
         .and_then(|r| r.get("address"))
         .and_then(|a| a.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     if ring_addrs.len() < 8 {
         eprintln!("need >= 8 ring members, got {}", ring_addrs.len());
@@ -107,7 +140,10 @@ fn main() {
     // matching needed (the daemon's random list may not include us)
     let self_addr = dero_crypto::rpc_addr::compressed_to_address(&sender_comp)
         .unwrap_or_else(|_| ring_addrs[0].clone());
-    println!("self addr: {}", self_addr.chars().take(24).collect::<String>());
+    println!(
+        "self addr: {}",
+        self_addr.chars().take(24).collect::<String>()
+    );
     // ring = [self, (dest or a random member), others] — ALL DISTINCT keys.
     // SC installs AND calls use ring size 4 (like the reference).
     let ring_size = if sc_install || sc_call { 4 } else { 8 };
@@ -121,12 +157,15 @@ fn main() {
         dest.clone()
     };
     let mut ring_members: Vec<String> = vec![self_addr.clone(), dest_for_ring.clone()];
-    for a in ring_addrs.into_iter().filter(|a| a != &self_addr && a.as_str() != dest_for_ring) {
+    for a in ring_addrs
+        .into_iter()
+        .filter(|a| a != &self_addr && a.as_str() != dest_for_ring)
+    {
         // skip if the key is already present (dup)
         let ak = address_to_compressed(&a).unwrap_or_default();
-        let dup = ring_members.iter().any(|m| {
-            m == &a || address_to_compressed(m).map(|c| c == ak).unwrap_or(false)
-        });
+        let dup = ring_members
+            .iter()
+            .any(|m| m == &a || address_to_compressed(m).map(|c| c == ak).unwrap_or(false));
         if !dup {
             ring_members.push(a);
         }
@@ -135,7 +174,10 @@ fn main() {
         }
     }
     if ring_members.len() < ring_size {
-        eprintln!("need {ring_size} distinct ring members, got {}", ring_members.len());
+        eprintln!(
+            "need {ring_size} distinct ring members, got {}",
+            ring_members.len()
+        );
         std::process::exit(1);
     }
     let dest = dest_for_ring; // the 0-value destination for SC installs
@@ -184,17 +226,15 @@ fn main() {
         } else {
             // zero balance: Left = G, Right = G (Go's ConstructElGamal)
             let g = base_g();
-            ElGamal {
-                left: g,
-                right: g,
-            }
+            ElGamal { left: g, right: g }
         };
         let comp = address_to_compressed(addr).expect("addr");
         let mut pk = [0u8; 33];
         pk.copy_from_slice(&comp);
         if i == 0 {
             // debug: decode the self balance
-            let val = dero_crypto::tx_builder::decode_balance(&balance, &secret).unwrap_or(u64::MAX);
+            let val =
+                dero_crypto::tx_builder::decode_balance(&balance, &secret).unwrap_or(u64::MAX);
             println!("self decoded balance: {}", val);
         }
         ring.push(RingMember {
@@ -218,7 +258,12 @@ fn main() {
     // debug: print each ring member's pointer (graviton hash truncated to bpp)
     for (i, m) in ring.iter().enumerate() {
         let ptr = &dero_crypto::graviton::grav_hash(&m.public_key)[..2];
-        println!("  member[{}] {} ptr={}", i, hex::encode(&m.public_key[..6]), hex::encode(ptr));
+        println!(
+            "  member[{}] {} ptr={}",
+            i,
+            hex::encode(&m.public_key[..6]),
+            hex::encode(ptr)
+        );
     }
 
     // 4. build the transaction — reference the CURRENT block hash + height
@@ -240,7 +285,11 @@ fn main() {
     if blid_hex.len() == 64 {
         blid.copy_from_slice(&hex::decode(blid_hex).expect("blid hex"));
     }
-    println!("height: {} blid: {}", height, hex::encode(blid)[..16].to_string());
+    println!(
+        "height: {} blid: {}",
+        height,
+        hex::encode(blid)[..16].to_string()
+    );
     let transfers = vec![Transfer {
         destination: dest.clone(),
         amount,
@@ -253,8 +302,16 @@ fn main() {
     //            + optional --arg k=v (Uint64) arguments
     let scdata = if sc_install {
         Arguments(vec![
-            Argument { name: SC_ACTION.to_string(), data_type: DATA_UINT64, value: ArgValue::U64(1) },
-            Argument { name: SC_CODE.to_string(), data_type: DATA_STRING, value: ArgValue::Str(sc_code.clone()) },
+            Argument {
+                name: SC_ACTION.to_string(),
+                data_type: DATA_UINT64,
+                value: ArgValue::U64(1),
+            },
+            Argument {
+                name: SC_CODE.to_string(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(sc_code.clone()),
+            },
         ])
     } else if sc_call {
         let mut scid32 = [0u8; 32];
@@ -266,9 +323,21 @@ fn main() {
         }
         scid32.copy_from_slice(&scid_bytes);
         let mut args = vec![
-            Argument { name: SC_ACTION.to_string(), data_type: DATA_UINT64, value: ArgValue::U64(0) },
-            Argument { name: "SC_ID".to_string(), data_type: DATA_HASH, value: ArgValue::Hash(scid32) },
-            Argument { name: "entrypoint".to_string(), data_type: DATA_STRING, value: ArgValue::Str(sc_entrypoint.clone()) },
+            Argument {
+                name: SC_ACTION.to_string(),
+                data_type: DATA_UINT64,
+                value: ArgValue::U64(0),
+            },
+            Argument {
+                name: "SC_ID".to_string(),
+                data_type: DATA_HASH,
+                value: ArgValue::Hash(scid32),
+            },
+            Argument {
+                name: "entrypoint".to_string(),
+                data_type: DATA_STRING,
+                value: ArgValue::Str(sc_entrypoint.clone()),
+            },
         ];
         // user-supplied SC arguments (the contract's parameters)
         for (k, v) in &sc_args {
@@ -277,7 +346,11 @@ fn main() {
                 ArgValue::Str(s) => (DATA_STRING, ArgValue::Str(s.clone())),
                 other => (DATA_STRING, other.clone()),
             };
-            args.push(Argument { name: k.clone(), data_type: dt, value: val });
+            args.push(Argument {
+                name: k.clone(),
+                data_type: dt,
+                value: val,
+            });
         }
         Arguments(args)
     } else {
@@ -303,21 +376,47 @@ fn main() {
     .expect("build_transaction");
     if std::env::var("SC_DEBUG").is_ok() {
         let mb = tx.scdata.marshal_binary().unwrap_or_default();
-        eprintln!("wallet scdata marshal {} bytes: {}", mb.len(), hex::encode(&mb[..mb.len().min(80)]));
+        eprintln!(
+            "wallet scdata marshal {} bytes: {}",
+            mb.len(),
+            hex::encode(&mb[..mb.len().min(80)])
+        );
     }
 
     // 5. self-verify the proof
     let txid = tx.get_hash(2);
     println!("txid: {}", hex::encode(txid));
-    println!("tx.height = {} tx.blid = {}", tx.height, hex::encode(&tx.blid[..8]));
-    println!("tx.npayloads = {} scdata.len = {}", tx.payloads.len(), tx.scdata.len());
+    println!(
+        "tx.height = {} tx.blid = {}",
+        tx.height,
+        hex::encode(&tx.blid[..8])
+    );
+    println!(
+        "tx.npayloads = {} scdata.len = {}",
+        tx.payloads.len(),
+        tx.scdata.len()
+    );
     for (i, p) in tx.payloads.iter().enumerate() {
-        let ok = verify(&p.scid, i as i32, &p.statement, p.proof.as_ref().unwrap(), &txid, p.burn_value);
+        let ok = verify(
+            &p.scid,
+            i as i32,
+            &p.statement,
+            p.proof.as_ref().unwrap(),
+            &txid,
+            p.burn_value,
+        );
         println!("proof[{}] self-verify: {}", i, ok);
         if !ok {
             // debug: does the proof bind a different txid? recompute with bpp=3
             let txid3 = tx.get_hash(3);
-            let ok3 = verify(&p.scid, i as i32, &p.statement, p.proof.as_ref().unwrap(), &txid3, p.burn_value);
+            let ok3 = verify(
+                &p.scid,
+                i as i32,
+                &p.statement,
+                p.proof.as_ref().unwrap(),
+                &txid3,
+                p.burn_value,
+            );
             println!("  (bpp3 txid verify: {})", ok3);
         }
     }
@@ -333,12 +432,34 @@ fn main() {
         Err(e) => println!("roundtrip strict: ERR {e}"),
     }
     // cross-check: what txid does GO compute for this blob?
-    let chk = json_rpc(&daemon, "DERO.CheckTxHash", serde_json::json!({"blob": blob}));
-    let go_txid = chk.get("result").and_then(|r| r.get("txid")).and_then(|t| t.as_str()).unwrap_or("ERR").to_string();
-    println!("GO txid for our blob: {}", go_txid.chars().take(24).collect::<String>());
-    println!("our txid:            {}", hex::encode(txid).chars().take(24).collect::<String>());
+    let chk = json_rpc(
+        &daemon,
+        "DERO.CheckTxHash",
+        serde_json::json!({"blob": blob}),
+    );
+    let go_txid = chk
+        .get("result")
+        .and_then(|r| r.get("txid"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("ERR")
+        .to_string();
+    println!(
+        "GO txid for our blob: {}",
+        go_txid.chars().take(24).collect::<String>()
+    );
+    println!(
+        "our txid:            {}",
+        hex::encode(txid).chars().take(24).collect::<String>()
+    );
     let resp = json_rpc(&daemon, "DERO.SubmitTX", serde_json::json!({"blob": blob}));
-    println!("submit: {}", serde_json::to_string(&resp).unwrap_or_default().chars().take(200).collect::<String>());
+    println!(
+        "submit: {}",
+        serde_json::to_string(&resp)
+            .unwrap_or_default()
+            .chars()
+            .take(200)
+            .collect::<String>()
+    );
 }
 
 fn sender_bech32(comp: &[u8; 33]) -> String {

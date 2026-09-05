@@ -77,14 +77,16 @@ impl NonceBalance {
             return Err("buf too small or value larger than 64 bits".into());
         }
         let balance = ElGamal::deserialize(&buf[size..])?;
-        Ok(NonceBalance { nonce_height, balance })
+        Ok(NonceBalance {
+            nonce_height,
+            balance,
+        })
     }
 
     /// Mirrors Go `UnmarshalNonce`: read only the leading varint (used to
     /// skip re-decoding balances during verification).
     pub fn parse_nonce(buf: &[u8]) -> Result<u64, String> {
-        let (nh, size) =
-            uvarint_decode(buf).ok_or("buf too small or value larger than 64 bits")?;
+        let (nh, size) = uvarint_decode(buf).ok_or("buf too small or value larger than 64 bits")?;
         if size <= 0 {
             return Err("buf too small or value larger than 64 bits".into());
         }
@@ -115,7 +117,10 @@ mod tests {
         assert_eq!(uvarint_encode(128), vec![0x80, 0x01]);
         assert_eq!(uvarint_encode(300), vec![0xac, 0x02]);
         assert_eq!(uvarint_encode(624485), vec![0xe5, 0x8e, 0x26]);
-        assert_eq!(uvarint_encode(u64::MAX), [vec![0xff; 9], vec![0x01]].concat());
+        assert_eq!(
+            uvarint_encode(u64::MAX),
+            [vec![0xff; 9], vec![0x01]].concat()
+        );
         // roundtrips
         for v in [0u64, 1, 127, 128, 300, 16384, u32::MAX as u64, u64::MAX] {
             let enc = uvarint_encode(v);
@@ -130,13 +135,22 @@ mod tests {
         assert!(uvarint_decode(&[vec![0xff; 9], vec![0x7f]].concat()).is_none());
         assert!(uvarint_decode(&[vec![0x80; 9], vec![0x02]].concat()).is_none());
         // 10th byte of 0 or 1 is legal
-        assert_eq!(uvarint_decode(&[vec![0xff; 9], vec![0x01]].concat()), Some((u64::MAX, 10)));
-        assert_eq!(uvarint_decode(&[vec![0xff; 9], vec![0x00]].concat()), Some((0x7fff_ffff_ffff_ffff, 10)));
+        assert_eq!(
+            uvarint_decode(&[vec![0xff; 9], vec![0x01]].concat()),
+            Some((u64::MAX, 10))
+        );
+        assert_eq!(
+            uvarint_decode(&[vec![0xff; 9], vec![0x00]].concat()),
+            Some((0x7fff_ffff_ffff_ffff, 10))
+        );
     }
 
     #[test]
     fn nonce_balance_roundtrip() {
-        let nb = NonceBalance { nonce_height: 1234567, balance: eg(42, 7) };
+        let nb = NonceBalance {
+            nonce_height: 1234567,
+            balance: eg(42, 7),
+        };
         let bytes = nb.serialize();
         // 1-3 byte varint + 66 byte balance
         assert_eq!(bytes.len(), uvarint_encode(1234567).len() + 66);
@@ -147,7 +161,10 @@ mod tests {
 
     #[test]
     fn nonce_balance_rejects_truncated() {
-        let nb = NonceBalance { nonce_height: 5, balance: eg(1, 1) };
+        let nb = NonceBalance {
+            nonce_height: 5,
+            balance: eg(1, 1),
+        };
         let bytes = nb.serialize();
         assert!(NonceBalance::deserialize(&bytes[..bytes.len() - 1]).is_err());
         assert!(NonceBalance::deserialize(&bytes[..1]).is_err());

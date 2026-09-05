@@ -12,8 +12,8 @@
 
 use ark_bn254::G1Projective;
 use ark_ec::PrimeGroup;
-use ark_ff::{Field, PrimeField};
 use ark_ff::fields::AdditiveGroup;
+use ark_ff::{Field, PrimeField};
 
 use crate::curve::{encode_compressed, encode_uncompressed};
 use crate::fieldvector::{fr_from_be_bytes, fr_to_be_bytes, FieldVector};
@@ -44,7 +44,12 @@ pub fn generate(
 ) -> InnerProduct {
     let n = as_.length();
     if n == 1 {
-        return InnerProduct { a: as_.element(0), b: bs.element(0), ls: vec![], rs: vec![] };
+        return InnerProduct {
+            a: as_.element(0),
+            b: bs.element(0),
+            ls: vec![],
+            rs: vec![],
+        };
     }
     let nprime = n / 2;
     let as_left = as_.slice(0, nprime);

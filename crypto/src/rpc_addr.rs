@@ -17,7 +17,10 @@ pub fn address_to_compressed(addr: &str) -> Result<Vec<u8>, String> {
     }
     let resbytes: Vec<u8> = res[1..].iter().map(|&b| b as u8).collect();
     if resbytes.len() < 33 {
-        return Err(format!("invalid address length as per spec : {}", resbytes.len()));
+        return Err(format!(
+            "invalid address length as per spec : {}",
+            resbytes.len()
+        ));
     }
     Ok(resbytes[..33].to_vec())
 }
@@ -72,7 +75,10 @@ fn bech32_decode(s: &str) -> Result<(String, Vec<usize>), String> {
     let data_part = &s[pos + 1..];
     let mut values = Vec::new();
     for c in data_part.chars() {
-        let idx = CHARSET.iter().position(|&a| a as char == c).ok_or("invalid character")?;
+        let idx = CHARSET
+            .iter()
+            .position(|&a| a as char == c)
+            .ok_or("invalid character")?;
         values.push(idx);
     }
     let mut exp = hrp_expand(hrp);
@@ -102,7 +108,12 @@ fn bech32_encode(hrp: &str, data: &[usize]) -> Result<String, String> {
 }
 
 /// Go convertbits (rpc/bech32.go).
-fn convertbits(data: &[usize], frombits: usize, tobits: usize, pad: bool) -> Result<Vec<usize>, String> {
+fn convertbits(
+    data: &[usize],
+    frombits: usize,
+    tobits: usize,
+    pad: bool,
+) -> Result<Vec<usize>, String> {
     let mut acc: u32 = 0;
     let mut bits: usize = 0;
     let mut ret = Vec::new();

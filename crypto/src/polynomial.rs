@@ -24,7 +24,9 @@ impl Polynomial {
             None => {
                 let mut one = [0u8; 32];
                 one[31] = 1;
-                Polynomial { coefficients: vec![one] }
+                Polynomial {
+                    coefficients: vec![one],
+                }
             }
             Some(c) => Polynomial { coefficients: c },
         }
@@ -47,10 +49,14 @@ impl Polynomial {
         let m1 = fr_from_be_bytes(&m.coefficients[1]);
         if m1 == Fr::ONE {
             for i in 1..product.len() {
-                product[i] = fr_to_be_bytes(fr_from_be_bytes(&product[i]) + fr_from_be_bytes(&self.coefficients[i - 1]));
+                product[i] = fr_to_be_bytes(
+                    fr_from_be_bytes(&product[i]) + fr_from_be_bytes(&self.coefficients[i - 1]),
+                );
             }
         }
-        Polynomial { coefficients: product }
+        Polynomial {
+            coefficients: product,
+        }
     }
 }
 
@@ -70,12 +76,19 @@ pub fn recursive_polynomials(accum: &Polynomial, a: &[Fr], b: &[Fr]) -> Vec<Poly
             fr_to_be_bytes(-atop),
             fr_to_be_bytes(Fr::ONE - btop),
         ]));
-        let right = Polynomial::new(Some(vec![
-            fr_to_be_bytes(atop),
-            fr_to_be_bytes(btop),
-        ]));
-        rec(list, &accum.mul(&left), &a[..a.len() - 1], &b[..b.len() - 1]);
-        rec(list, &accum.mul(&right), &a[..a.len() - 1], &b[..b.len() - 1]);
+        let right = Polynomial::new(Some(vec![fr_to_be_bytes(atop), fr_to_be_bytes(btop)]));
+        rec(
+            list,
+            &accum.mul(&left),
+            &a[..a.len() - 1],
+            &b[..b.len() - 1],
+        );
+        rec(
+            list,
+            &accum.mul(&right),
+            &a[..a.len() - 1],
+            &b[..b.len() - 1],
+        );
     }
     rec(&mut list, accum, a, b);
     list
@@ -99,14 +112,27 @@ mod tests {
         let m = Polynomial::new(Some(vec![coeff(5), coeff(1)]));
         let prod = p.mul(&m);
         let hex = |v: u64| hex::encode(coeff(v));
-        assert_eq!(prod.coefficients.iter().map(|c| hex::encode(c)).collect::<Vec<_>>(),
-                   vec![hex(15), hex(13), hex(2)]);
+        assert_eq!(
+            prod.coefficients
+                .iter()
+                .map(|c| hex::encode(c))
+                .collect::<Vec<_>>(),
+            vec![hex(15), hex(13), hex(2)]
+        );
     }
 
     #[test]
     fn recursive_polynomials_count() {
-        let a = vec![fr_from_hex(&hex::encode(coeff(1))), fr_from_hex(&hex::encode(coeff(2))), fr_from_hex(&hex::encode(coeff(3)))];
-        let b = vec![fr_from_hex(&hex::encode(coeff(0))), fr_from_hex(&hex::encode(coeff(1))), fr_from_hex(&hex::encode(coeff(1)))];
+        let a = vec![
+            fr_from_hex(&hex::encode(coeff(1))),
+            fr_from_hex(&hex::encode(coeff(2))),
+            fr_from_hex(&hex::encode(coeff(3))),
+        ];
+        let b = vec![
+            fr_from_hex(&hex::encode(coeff(0))),
+            fr_from_hex(&hex::encode(coeff(1))),
+            fr_from_hex(&hex::encode(coeff(1))),
+        ];
         let list = recursive_polynomials(&Polynomial::new(None), &a, &b);
         assert_eq!(list.len(), 8);
         // each polynomial has 4 coefficients (3 binomials + trailing)

@@ -17,27 +17,32 @@ use ark_ff::PrimeField;
 use serde_json::{json, Value};
 
 use dero_crypto::bulletproof;
-use dero_crypto::curve::{be32_to_bigint, decode_compressed, encode_compressed, encode_uncompressed};
+use dero_crypto::curve::{
+    be32_to_bigint, decode_compressed, encode_compressed, encode_uncompressed,
+};
 use dero_crypto::elgamal::ElGamal;
 use dero_crypto::fft;
 use dero_crypto::fieldvector::{fr_from_be_bytes, fr_from_hex, fr_to_be_bytes, FieldVector};
 use dero_crypto::hash_to_point;
 use dero_crypto::innerproduct;
 use dero_crypto::keccak;
-use dero_crypto::pedersen::{self, point_to_hex};
 use dero_crypto::pedersen::point_from_hex as ppoint_from_hex;
+use dero_crypto::pedersen::{self, point_to_hex};
 use dero_crypto::pointvector::PointVector;
 use dero_crypto::polynomial::{self, Polynomial};
 
 /// Parse a JSON array of 32-byte-hex strings into raw byte arrays.
 fn hex32_list(hexes: &[String]) -> Vec<[u8; 32]> {
-    hexes.iter().map(|h| {
-        let b = hex::decode(h).expect("valid hex");
-        assert_eq!(b.len(), 32, "must be 32 bytes");
-        let mut a = [0u8; 32];
-        a.copy_from_slice(&b);
-        a
-    }).collect()
+    hexes
+        .iter()
+        .map(|h| {
+            let b = hex::decode(h).expect("valid hex");
+            assert_eq!(b.len(), 32, "must be 32 bytes");
+            let mut a = [0u8; 32];
+            a.copy_from_slice(&b);
+            a
+        })
+        .collect()
 }
 
 /// Rebuild a realistic statement: C[i] = r*pk_i + delta_i*G, D = r*G, zero
@@ -56,7 +61,11 @@ fn realistic_statement(st: &mut bulletproof::Statement, w: &bulletproof::Witness
         };
         let mut db = [0u8; 32];
         db[24..32].copy_from_slice(&delta.unsigned_abs().to_be_bytes()[8..]);
-        let sc = if delta < 0 { -fr_from_be_bytes(&db) } else { fr_from_be_bytes(&db) };
+        let sc = if delta < 0 {
+            -fr_from_be_bytes(&db)
+        } else {
+            fr_from_be_bytes(&db)
+        };
         let mut x = g.mul_bigint(sc.into_bigint());
         x += st.publickeylist[i].mul_bigint(be32_to_bigint(&fr_to_be_bytes(w.r)));
         c.push(x);
@@ -70,19 +79,46 @@ fn realistic_statement(st: &mut bulletproof::Statement, w: &bulletproof::Witness
 
 /// Build a Statement + Witness from the request input (mirrors Go
 /// statementFromIn: ring pairs CLn = C, CRn = D).
-fn statement_from_in(inp: &serde_json::Map<String, Value>) -> Result<(bulletproof::Statement, bulletproof::Witness), String> {
-    let pk = str_list(inp, "publickeylist")?.iter().map(|h| ppoint_from_hex(h)).collect::<Vec<_>>();
-    let c = str_list(inp, "c")?.iter().map(|h| ppoint_from_hex(h)).collect::<Vec<_>>();
+fn statement_from_in(
+    inp: &serde_json::Map<String, Value>,
+) -> Result<(bulletproof::Statement, bulletproof::Witness), String> {
+    let pk = str_list(inp, "publickeylist")?
+        .iter()
+        .map(|h| ppoint_from_hex(h))
+        .collect::<Vec<_>>();
+    let c = str_list(inp, "c")?
+        .iter()
+        .map(|h| ppoint_from_hex(h))
+        .collect::<Vec<_>>();
     let d = ppoint_from_hex(&s_key(inp, "d")?);
-    let roothash: [u8; 32] = hex_decode(&s_key(inp, "roothash")?)?.try_into().map_err(|_| "roothash must be 32 bytes")?;
-    let fees: u64 = s_key(inp, "fees")?.parse().map_err(|e| format!("fees: {}", e))?;
+    let roothash: [u8; 32] = hex_decode(&s_key(inp, "roothash")?)?
+        .try_into()
+        .map_err(|_| "roothash must be 32 bytes")?;
+    let fees: u64 = s_key(inp, "fees")?
+        .parse()
+        .map_err(|e| format!("fees: {}", e))?;
     // witness fields are optional (verify requests carry only the statement)
-    let secret_key = match s_key(inp, "secretkey") { Ok(h) => fr_from_hex(&h), Err(_) => Fr::ZERO };
-    let r = match s_key(inp, "r") { Ok(h) => fr_from_hex(&h), Err(_) => Fr::ZERO };
-    let transfer: u64 = match s_key(inp, "transfer") { Ok(v) => v.parse().map_err(|e| format!("transfer: {}", e))?, Err(_) => 0 };
-    let balance: u64 = match s_key(inp, "balance") { Ok(v) => v.parse().map_err(|e| format!("balance: {}", e))?, Err(_) => 0 };
+    let secret_key = match s_key(inp, "secretkey") {
+        Ok(h) => fr_from_hex(&h),
+        Err(_) => Fr::ZERO,
+    };
+    let r = match s_key(inp, "r") {
+        Ok(h) => fr_from_hex(&h),
+        Err(_) => Fr::ZERO,
+    };
+    let transfer: u64 = match s_key(inp, "transfer") {
+        Ok(v) => v.parse().map_err(|e| format!("transfer: {}", e))?,
+        Err(_) => 0,
+    };
+    let balance: u64 = match s_key(inp, "balance") {
+        Ok(v) => v.parse().map_err(|e| format!("balance: {}", e))?,
+        Err(_) => 0,
+    };
     let idx: Vec<usize> = match inp.get("index").and_then(|v| v.as_array()) {
-        Some(a) => a.iter().filter_map(|v| v.as_i64().map(|x| x as usize)).collect(),
+        Some(a) => a
+            .iter()
+            .filter_map(|v| v.as_i64().map(|x| x as usize))
+            .collect(),
         None => vec![0, 0],
     };
     let index = [idx[0], idx[1]];
@@ -96,16 +132,26 @@ fn statement_from_in(inp: &serde_json::Map<String, Value>) -> Result<(bulletproo
         fees,
         pointers: Vec::new(),
     };
-    let w = bulletproof::Witness { secret_key, r, transfer_amount: transfer, balance, index };
+    let w = bulletproof::Witness {
+        secret_key,
+        r,
+        transfer_amount: transfer,
+        balance,
+        index,
+    };
     Ok((st, w))
 }
 
 fn s_key(inp: &serde_json::Map<String, Value>, k: &str) -> Result<String, String> {
-    inp.get(k).and_then(|v| v.as_str()).map(|x| x.to_string()).ok_or_else(|| format!("missing key {}", k))
+    inp.get(k)
+        .and_then(|v| v.as_str())
+        .map(|x| x.to_string())
+        .ok_or_else(|| format!("missing key {}", k))
 }
 
 /// Shared persistent graviton trees across requests (single static).
-static mut GRAV_TREES: Option<std::collections::HashMap<String, dero_crypto::graviton::Tree>> = None;
+static mut GRAV_TREES: Option<std::collections::HashMap<String, dero_crypto::graviton::Tree>> =
+    None;
 fn grav_tree_mut(name: &str) -> &'static mut dero_crypto::graviton::Tree {
     unsafe {
         let map = GRAV_TREES.get_or_insert_with(|| std::collections::HashMap::new());
@@ -143,7 +189,9 @@ fn parse_rfc3339(s: &str) -> Result<(i64, u32), String> {
             frac.push('0');
         }
         frac_nanos = frac[..9].parse().map_err(|_| "frac")?;
-        &zone[zone.find(|c: char| c == 'Z' || c == '+' || c == '-').unwrap_or(0)..]
+        &zone[zone
+            .find(|c: char| c == 'Z' || c == '+' || c == '-')
+            .unwrap_or(0)..]
     } else {
         zone
     };
@@ -179,7 +227,9 @@ fn parse_rfc3339(s: &str) -> Result<(i64, u32), String> {
 }
 
 /// Build a Block from JSON — mirrors Go blockFromIn.
-fn block_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::block::Block, String> {
+fn block_from_in(
+    inp: &serde_json::Map<String, Value>,
+) -> Result<dero_crypto::block::Block, String> {
     use dero_crypto::block::{Block, MiniBlock};
     let u64 = |k: &str| -> Result<u64, String> {
         s_key(inp, k)?.parse().map_err(|e| format!("{}: {}", k, e))
@@ -194,7 +244,10 @@ fn block_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::bl
         for h in arr {
             let s = h.as_str().ok_or(format!("{} entry not string", what))?;
             let b = hex_decode(s)?;
-            out.push(b.try_into().map_err(|_| format!("{} entry must be 32 bytes", what))?);
+            out.push(
+                b.try_into()
+                    .map_err(|_| format!("{} entry must be 32 bytes", what))?,
+            );
         }
         Ok(out)
     };
@@ -209,10 +262,18 @@ fn block_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::bl
         for mj in arr {
             let m = mj.as_object().ok_or("miniblock not object")?;
             let u8 = |k: &str| -> Result<u8, String> {
-                m.get(k).and_then(|v| v.as_str()).unwrap_or("0").parse().map_err(|e| format!("{}: {}", k, e))
+                m.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .map_err(|e| format!("{}: {}", k, e))
             };
             let uv = |k: &str| -> Result<u64, String> {
-                m.get(k).and_then(|v| v.as_str()).unwrap_or("0").parse().map_err(|e| format!("{}: {}", k, e))
+                m.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .map_err(|e| format!("{}: {}", k, e))
             };
             let mut past = [0u32; 2];
             if let Some(p) = m.get("past").and_then(|v| v.as_array()) {
@@ -250,7 +311,11 @@ fn block_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::bl
         height: u64("height")?,
         miner_tx,
         proof: hx32("proof")?,
-        tips: inp.get("tips").map(|v| hx32_list(v, "tips")).transpose()?.unwrap_or_default(),
+        tips: inp
+            .get("tips")
+            .map(|v| hx32_list(v, "tips"))
+            .transpose()?
+            .unwrap_or_default(),
         mini_blocks,
         tx_hashes: inp
             .get("tx_hashes")
@@ -262,7 +327,9 @@ fn block_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::bl
 
 /// Build a VALID tx exactly like Go buildValidTx (mirrors
 /// walletapi/transaction_build.go): real encrypted balances + real proof.
-fn build_valid_tx(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::transaction::Transaction, String> {
+fn build_valid_tx(
+    inp: &serde_json::Map<String, Value>,
+) -> Result<dero_crypto::transaction::Transaction, String> {
     use ark_ec::PrimeGroup;
     use ark_ff::PrimeField;
     use dero_crypto::bulletproof::{self, Statement, Witness};
@@ -270,27 +337,48 @@ fn build_valid_tx(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::t
     use dero_crypto::elgamal::ElGamal;
     use dero_crypto::hash_to_point::base_g;
     use dero_crypto::rpc_args::Arguments;
-    use dero_crypto::transaction::{AssetPayload, Transaction, TX_NORMAL, PAYLOAD_LIMIT};
+    use dero_crypto::transaction::{AssetPayload, Transaction, PAYLOAD_LIMIT, TX_NORMAL};
 
     let g = base_g();
-    let pk_hex: Vec<String> = inp.get("publickeylist").and_then(|v| v.as_array())
+    let pk_hex: Vec<String> = inp
+        .get("publickeylist")
+        .and_then(|v| v.as_array())
         .ok_or("missing publickeylist")?
-        .iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
-    let ring: Vec<_> = pk_hex.iter().map(|h| decode_compressed(&hex::decode(h).unwrap()).unwrap()).collect();
+        .iter()
+        .map(|v| v.as_str().unwrap_or("").to_string())
+        .collect();
+    let ring: Vec<_> = pk_hex
+        .iter()
+        .map(|h| decode_compressed(&hex::decode(h).unwrap()).unwrap())
+        .collect();
     let n = ring.len();
     let sk = fr_from_hex(&s_key(inp, "secretkey")?);
     let r = fr_from_hex(&s_key(inp, "r")?);
     let value: u64 = s_key(inp, "value")?.parse().unwrap_or(0);
     let fees: u64 = s_key(inp, "fees")?.parse().unwrap_or(0);
     let burn: u64 = s_key(inp, "burn")?.parse().unwrap_or(0);
-    let bal_hex: Vec<String> = inp.get("balances").and_then(|v| v.as_array())
+    let bal_hex: Vec<String> = inp
+        .get("balances")
+        .and_then(|v| v.as_array())
         .ok_or("missing balances")?
-        .iter().map(|v| v.as_str().unwrap_or("0").to_string()).collect();
-    let balance: Vec<u64> = bal_hex.iter().map(|h| u64::from_str_radix(h, 16).unwrap_or(0)).collect();
-    let eb_hex: Vec<String> = inp.get("eblind").and_then(|v| v.as_array())
+        .iter()
+        .map(|v| v.as_str().unwrap_or("0").to_string())
+        .collect();
+    let balance: Vec<u64> = bal_hex
+        .iter()
+        .map(|h| u64::from_str_radix(h, 16).unwrap_or(0))
+        .collect();
+    let eb_hex: Vec<String> = inp
+        .get("eblind")
+        .and_then(|v| v.as_array())
         .ok_or("missing eblind")?
-        .iter().map(|v| v.as_str().unwrap_or("0").to_string()).collect();
-    let eblind: Vec<u64> = eb_hex.iter().map(|h| u64::from_str_radix(h, 16).unwrap_or(0)).collect();
+        .iter()
+        .map(|v| v.as_str().unwrap_or("0").to_string())
+        .collect();
+    let eblind: Vec<u64> = eb_hex
+        .iter()
+        .map(|h| u64::from_str_radix(h, 16).unwrap_or(0))
+        .collect();
     let rand = hex_decode(&s_key(inp, "rand")?)?;
     let roothash_b = hex_decode(&s_key(inp, "roothash")?)?;
     let mut roothash = [0u8; 32];
@@ -304,7 +392,8 @@ fn build_valid_tx(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::t
     uinput.extend_from_slice(&roothash);
     uinput.extend_from_slice(&scid);
     uinput.extend_from_slice(b"0"); // scid_index strconv
-    let upoint = dero_crypto::hash_to_point::hash_to_point(&dero_crypto::keccak::keccak256(&uinput));
+    let upoint =
+        dero_crypto::hash_to_point::hash_to_point(&dero_crypto::keccak::keccak256(&uinput));
     let u = upoint.mul_bigint(sk.into_bigint());
 
     let mut c = Vec::with_capacity(n);
@@ -320,7 +409,11 @@ fn build_valid_tx(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::t
         };
         let mut db = [0u8; 32];
         db[24..32].copy_from_slice(&delta.unsigned_abs().to_be_bytes()[8..]);
-        let dsc = if delta < 0 { -fr_from_be_bytes(&db) } else { fr_from_be_bytes(&db) };
+        let dsc = if delta < 0 {
+            -fr_from_be_bytes(&db)
+        } else {
+            fr_from_be_bytes(&db)
+        };
         let mut x = g.mul_bigint(dsc.into_bigint());
         x += ring[i].mul_bigint(r.into_bigint());
         c.push(x);
@@ -395,14 +488,25 @@ fn build_valid_tx(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::t
         }
     }
     let tx_hash = tx.get_hash(3);
-    let proof = bulletproof::generate_proof(&scid, 0, &tx.payloads[0].statement, &w, &u, &tx_hash, burn, &rand);
+    let proof = bulletproof::generate_proof(
+        &scid,
+        0,
+        &tx.payloads[0].statement,
+        &w,
+        &u,
+        &tx_hash,
+        burn,
+        &rand,
+    );
     tx.payloads[0].proof = Some(proof);
     Ok(tx)
 }
 
 /// Build a Transaction from JSON — mirrors Go txFromIn.
-fn tx_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::transaction::Transaction, String> {
-    use dero_crypto::rpc_args::{Argument, ArgValue, Arguments};
+fn tx_from_in(
+    inp: &serde_json::Map<String, Value>,
+) -> Result<dero_crypto::transaction::Transaction, String> {
+    use dero_crypto::rpc_args::{ArgValue, Argument, Arguments};
     use dero_crypto::transaction::{AssetPayload, Transaction, PAYLOAD_LIMIT};
 
     let uvar = |k: &str| -> Result<u64, String> {
@@ -448,24 +552,49 @@ fn tx_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::trans
     if tx_type == TX_BURN || tx_type == TX_NORMAL || tx_type == TX_SC {
         tx.height = uvar("height")?;
         tx.blid = hx32("blid")?;
-        let pay_arr = inp.get("payloads").and_then(|v| v.as_array()).ok_or("missing payloads")?;
+        let pay_arr = inp
+            .get("payloads")
+            .and_then(|v| v.as_array())
+            .ok_or("missing payloads")?;
         for pj in pay_arr {
             let p = pj.as_object().ok_or("payload not object")?;
-            let burn: u64 = p.get("burn").and_then(|v| v.as_str()).unwrap_or("0").parse().map_err(|e| format!("burn: {}", e))?;
+            let burn: u64 = p
+                .get("burn")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .parse()
+                .map_err(|e| format!("burn: {}", e))?;
             let scid_b = hex_decode(p.get("scid").and_then(|v| v.as_str()).ok_or("scid")?)?;
             let mut scid = [0u8; 32];
             scid.copy_from_slice(&scid_b);
-            let rpc_type: u8 = p.get("rpctype").and_then(|v| v.as_str()).unwrap_or("0").parse().map_err(|e| format!("rpctype: {}", e))?;
-            let rpc_payload = hex_decode(p.get("rpcpayload").and_then(|v| v.as_str()).ok_or("rpcpayload")?)?;
+            let rpc_type: u8 = p
+                .get("rpctype")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .parse()
+                .map_err(|e| format!("rpctype: {}", e))?;
+            let rpc_payload = hex_decode(
+                p.get("rpcpayload")
+                    .and_then(|v| v.as_str())
+                    .ok_or("rpcpayload")?,
+            )?;
             if rpc_payload.len() != PAYLOAD_LIMIT {
-                return Err(format!("rpcpayload: expected {} bytes, got {}", PAYLOAD_LIMIT, rpc_payload.len()));
+                return Err(format!(
+                    "rpcpayload: expected {} bytes, got {}",
+                    PAYLOAD_LIMIT,
+                    rpc_payload.len()
+                ));
             }
-            let stmt_in = p.get("statement").and_then(|v| v.as_object()).ok_or("payload statement missing")?;
+            let stmt_in = p
+                .get("statement")
+                .and_then(|v| v.as_object())
+                .ok_or("payload statement missing")?;
             let (mut st, w) = statement_from_in(stmt_in)?;
             realistic_statement(&mut st, &w, burn);
             let proof_b = hex_decode(p.get("proof").and_then(|v| v.as_str()).ok_or("proof")?)?;
             let m = st.publickeylist.len() / 2;
-            let proof = bulletproof::deserialize(&proof_b, m).map_err(|e| format!("proof: {}", e))?;
+            let proof =
+                bulletproof::deserialize(&proof_b, m).map_err(|e| format!("proof: {}", e))?;
             tx.payloads.push(AssetPayload {
                 scid,
                 burn_value: burn,
@@ -477,18 +606,39 @@ fn tx_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::trans
         }
     }
     if tx_type == TX_SC {
-        let sc_arr = inp.get("scdata").and_then(|v| v.as_array()).ok_or("missing scdata")?;
+        let sc_arr = inp
+            .get("scdata")
+            .and_then(|v| v.as_array())
+            .ok_or("missing scdata")?;
         let mut args = Vec::new();
         for aj in sc_arr {
             let a = aj.as_object().ok_or("scdata arg not object")?;
-            let name = a.get("name").and_then(|v| v.as_str()).ok_or("scdata name")?.to_string();
-            let dtype = a.get("datatype").and_then(|v| v.as_str()).ok_or("scdata datatype")?.as_bytes()[0];
-            let v = a.get("value").and_then(|v| v.as_str()).ok_or("scdata value")?.to_string();
+            let name = a
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or("scdata name")?
+                .to_string();
+            let dtype = a
+                .get("datatype")
+                .and_then(|v| v.as_str())
+                .ok_or("scdata datatype")?
+                .as_bytes()[0];
+            let v = a
+                .get("value")
+                .and_then(|v| v.as_str())
+                .ok_or("scdata value")?
+                .to_string();
             let value = match dtype {
                 dero_crypto::rpc_args::DATA_STRING => ArgValue::Str(v),
-                dero_crypto::rpc_args::DATA_INT64 => ArgValue::I64(v.parse().map_err(|e| format!("int64: {}", e))?),
-                dero_crypto::rpc_args::DATA_UINT64 => ArgValue::U64(v.parse().map_err(|e| format!("uint64: {}", e))?),
-                dero_crypto::rpc_args::DATA_FLOAT64 => ArgValue::F64(v.parse().map_err(|e| format!("float64: {}", e))?),
+                dero_crypto::rpc_args::DATA_INT64 => {
+                    ArgValue::I64(v.parse().map_err(|e| format!("int64: {}", e))?)
+                }
+                dero_crypto::rpc_args::DATA_UINT64 => {
+                    ArgValue::U64(v.parse().map_err(|e| format!("uint64: {}", e))?)
+                }
+                dero_crypto::rpc_args::DATA_FLOAT64 => {
+                    ArgValue::F64(v.parse().map_err(|e| format!("float64: {}", e))?)
+                }
                 dero_crypto::rpc_args::DATA_HASH => {
                     let b = hex_decode(&v)?;
                     ArgValue::Hash(b.try_into().map_err(|_| "hash must be 32 bytes")?)
@@ -507,7 +657,11 @@ fn tx_from_in(inp: &serde_json::Map<String, Value>) -> Result<dero_crypto::trans
                 }
                 _ => return Err(format!("unknown scdata datatype {}", dtype as char)),
             };
-            args.push(Argument { name, data_type: dtype, value });
+            args.push(Argument {
+                name,
+                data_type: dtype,
+                value,
+            });
         }
         tx.scdata = Arguments(args);
     }
@@ -585,9 +739,36 @@ fn deserialize_proof(b: &[u8], m: usize) -> Result<bulletproof::Proof, String> {
         rs.push(pt(take(33, "R")?, &format!("R[{}]", i))?);
     }
     Ok(bulletproof::Proof {
-        ba, bs, a, b, clng, crng, c_0g, dg, y_0g, gg, c_xg, y_xg, u,
-        f, z_a, t_1, t_2, that, mu, c, s_sk, s_r, s_b, s_tau,
-        ip: innerproduct::InnerProduct { a: ip_a, b: ip_b, ls, rs },
+        ba,
+        bs,
+        a,
+        b,
+        clng,
+        crng,
+        c_0g,
+        dg,
+        y_0g,
+        gg,
+        c_xg,
+        y_xg,
+        u,
+        f,
+        z_a,
+        t_1,
+        t_2,
+        that,
+        mu,
+        c,
+        s_sk,
+        s_r,
+        s_b,
+        s_tau,
+        ip: innerproduct::InnerProduct {
+            a: ip_a,
+            b: ip_b,
+            ls,
+            rs,
+        },
     })
 }
 
@@ -599,7 +780,11 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
 fn str_list(inp: &serde_json::Map<String, Value>, key: &str) -> Result<Vec<String>, String> {
     inp.get(key)
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .ok_or_else(|| format!("missing array key {}", key))
 }
 
@@ -691,7 +876,8 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 // order), ring_balances (encrypted balance hex per member),
                 // height, blid.
                 let words = s("words")?;
-                let words_vec: Vec<String> = words.split_whitespace().map(|w| w.to_string()).collect();
+                let words_vec: Vec<String> =
+                    words.split_whitespace().map(|w| w.to_string()).collect();
                 let seed = dero_crypto::mnemonics::words_to_key(&words_vec)?;
                 // sender secret = seed (big-endian scalar)
                 let mut le = [0u8; 32];
@@ -703,7 +889,9 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let dest = s("dest")?;
                 let amount: u64 = s("amount")?.parse().map_err(|e| format!("amount: {e}"))?;
                 let height: u64 = s("height")?.parse().map_err(|e| format!("height: {e}"))?;
-                let max_bits: usize = s("max_bits")?.parse().map_err(|e| format!("max_bits: {e}"))?;
+                let max_bits: usize = s("max_bits")?
+                    .parse()
+                    .map_err(|e| format!("max_bits: {e}"))?;
                 let blid_hex = s("blid")?;
                 let mut blid = [0u8; 32];
                 blid.copy_from_slice(&hex_decode(&blid_hex)?);
@@ -711,7 +899,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let mut roothash = [0u8; 32];
                 roothash.copy_from_slice(&hex_decode(&rh_hex)?);
                 let ring: Vec<String> = s("ring")?.split(',').map(|x| x.to_string()).collect();
-                let ring_bal: Vec<String> = s("ring_balances")?.split(',').map(|x| x.to_string()).collect();
+                let ring_bal: Vec<String> = s("ring_balances")?
+                    .split(',')
+                    .map(|x| x.to_string())
+                    .collect();
                 let wi0: usize = s("wi0")?.parse().map_err(|e| format!("wi0: {e}"))?;
                 let wi1: usize = s("wi1")?.parse().map_err(|e| format!("wi1: {e}"))?;
                 let dest_key_hex = s("dest_key")?;
@@ -733,11 +924,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 };
                 // member 0 = self (sender) with emap[0]
                 let sb = hex_decode(&ring_bal[0])?;
-                let self_bal_decoded: u64 =
-                    match inp.get("balance").and_then(|v| v.as_str()) {
-                        Some(b) => b.parse().map_err(|e| format!("balance: {e}"))?,
-                        None => 0,
-                    };
+                let self_bal_decoded: u64 = match inp.get("balance").and_then(|v| v.as_str()) {
+                    Some(b) => b.parse().map_err(|e| format!("balance: {e}"))?,
+                    None => 0,
+                };
                 members.push(dero_crypto::tx_builder::RingMember {
                     public_key: self_comp,
                     balance: dero_crypto::elgamal::ElGamal::deserialize(&sb)
@@ -766,13 +956,19 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     members.push(dero_crypto::tx_builder::RingMember {
                         public_key: a,
                         balance: bal,
-                    balance_decoded: 0,
+                        balance_decoded: 0,
                     });
                     i += 1;
                 }
                 if std::env::var("WALLET_DEBUG").is_ok() {
                     for (mi, m) in members.iter().enumerate() {
-                        eprintln!("member[{mi}] pk={} bal.left={}", hex::encode(&m.public_key[..8]), hex::encode(&dero_crypto::curve::encode_compressed(&m.balance.left)[..8]));
+                        eprintln!(
+                            "member[{mi}] pk={} bal.left={}",
+                            hex::encode(&m.public_key[..8]),
+                            hex::encode(
+                                &dero_crypto::curve::encode_compressed(&m.balance.left)[..8]
+                            )
+                        );
                     }
                     eprintln!("wi0={wi0} wi1={wi1} dest={}", &dest_key_hex[..8]);
                 }
@@ -788,13 +984,14 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         payload_rpc: Vec::new(),
                     }],
                     &[members],
-                    wi0, wi1,
+                    wi0,
+                    wi1,
                     &blid,
                     height,
                     &dero_crypto::rpc_args::Arguments::default(),
                     &roothash,
                     max_bits,
-                    0,  // fees placeholder
+                    0, // fees placeholder
                     &secret,
                     &[0x5au8; 16384], // enough randomness for the proof draws (273 × 32)
                 )?;
@@ -810,12 +1007,17 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     let c0 = stmt.c[0];
                     let cln0 = stmt.cln[0];
                     let implied = cln0 - c0;
-                    eprintln!("DEBUG tx r={} c0={} cln0={} implied0={}",
+                    eprintln!(
+                        "DEBUG tx r={} c0={} cln0={} implied0={}",
                         hex::encode(&dero_crypto::wallet::fr_to_be32(
-                            dero_crypto::wallet::calc_r(&roothash, &stmt.publickeylist, &secret))),
+                            dero_crypto::wallet::calc_r(&roothash, &stmt.publickeylist, &secret)
+                        )),
                         hex::encode(&dero_crypto::curve::encode_compressed(&c0))[..12].to_string(),
-                        hex::encode(&dero_crypto::curve::encode_compressed(&cln0))[..12].to_string(),
-                        hex::encode(&dero_crypto::curve::encode_compressed(&implied))[..12].to_string());
+                        hex::encode(&dero_crypto::curve::encode_compressed(&cln0))[..12]
+                            .to_string(),
+                        hex::encode(&dero_crypto::curve::encode_compressed(&implied))[..12]
+                            .to_string()
+                    );
                 }
                 Ok(json!({"tx": hex::encode(tx.serialize(bpp))}))
             }
@@ -823,17 +1025,23 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 // rebuild the CLn/CRn from the same inputs the builder uses
                 // and return them, so we can compare against Go's tx directly.
                 let words = s("words")?;
-                let words_vec: Vec<String> = words.split_whitespace().map(|w| w.to_string()).collect();
+                let words_vec: Vec<String> =
+                    words.split_whitespace().map(|w| w.to_string()).collect();
                 let seed = dero_crypto::mnemonics::words_to_key(&words_vec)?;
                 let mut le = [0u8; 32];
                 for i in 0..32 {
                     le[i] = seed[31 - i];
                 }
                 let secret = ark_bn254::Fr::from_le_bytes_mod_order(&le);
-                let max_bits: usize = s("max_bits")?.parse().map_err(|e| format!("max_bits: {e}"))?;
+                let max_bits: usize = s("max_bits")?
+                    .parse()
+                    .map_err(|e| format!("max_bits: {e}"))?;
                 let wi0: usize = s("wi0")?.parse().map_err(|e| format!("wi0: {e}"))?;
                 let wi1: usize = s("wi1")?.parse().map_err(|e| format!("wi1: {e}"))?;
-                let ring_bal: Vec<String> = s("ring_balances")?.split(',').map(|x| x.to_string()).collect();
+                let ring_bal: Vec<String> = s("ring_balances")?
+                    .split(',')
+                    .map(|x| x.to_string())
+                    .collect();
                 let dest_key_hex = s("dest_key")?;
                 // build members like wallet_build_tx
                 let g = dero_crypto::hash_to_point::base_g();
@@ -868,7 +1076,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     members.push(dero_crypto::tx_builder::RingMember {
                         public_key: a,
                         balance: parse_bal(&ring_bal[i])?,
-                    balance_decoded: 0,
+                        balance_decoded: 0,
                     });
                     i += 1;
                 }
@@ -876,7 +1084,8 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let sender = g.mul_bigint(secret.into_bigint());
                 let witness_index = [wi0, wi1];
                 let receiver_comp = dero_crypto::curve::decode_compressed(&members[1].public_key)?;
-                let mut anonset: Vec<&dero_crypto::tx_builder::RingMember> = members[2..].iter().collect();
+                let mut anonset: Vec<&dero_crypto::tx_builder::RingMember> =
+                    members[2..].iter().collect();
                 let mut publickeylist: Vec<ark_bn254::G1Projective> = Vec::new();
                 let mut ebalances_list: Vec<dero_crypto::elgamal::ElGamal> = Vec::new();
                 for k in 0..members.len() {
@@ -886,7 +1095,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         (receiver_comp, members[1].balance.clone())
                     } else {
                         let m = anonset.remove(0);
-                        (dero_crypto::curve::decode_compressed(&m.public_key)?, m.balance.clone())
+                        (
+                            dero_crypto::curve::decode_compressed(&m.public_key)?,
+                            m.balance.clone(),
+                        )
                     };
                     publickeylist.push(pk);
                     ebalances_list.push(bal);
@@ -900,7 +1112,13 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let _bpp = (max_bits / 8) as u8;
                 let mut c: Vec<ark_bn254::G1Projective> = Vec::new();
                 for k in 0..publickeylist.len() {
-                    let delta: i64 = if k == wi0 { -(amount as i64) } else if k == wi1 { amount as i64 } else { 0 };
+                    let delta: i64 = if k == wi0 {
+                        -(amount as i64)
+                    } else if k == wi1 {
+                        amount as i64
+                    } else {
+                        0
+                    };
                     let abs_delta = delta.unsigned_abs() as u64;
                     let mut gd = g.mul_bigint(ark_ff::BigInt::<4>::from(abs_delta));
                     if delta < 0 {
@@ -922,7 +1140,9 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     cln_h.push(hex::encode(dero_crypto::curve::encode_compressed(&cln[k])));
                     crn_h.push(hex::encode(dero_crypto::curve::encode_compressed(&crn[k])));
                 }
-                Ok(json!({"cln": cln_h, "crn": crn_h, "r": hex::encode(dero_crypto::wallet::fr_to_be32(r))}))
+                Ok(
+                    json!({"cln": cln_h, "crn": crn_h, "r": hex::encode(dero_crypto::wallet::fr_to_be32(r))}),
+                )
             }
             "calc_r_debug" => {
                 // compute r = ReducedHash(HashToPoint("DERO"||roothash||pubkeys) * secret)
@@ -995,7 +1215,9 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let shared_pt = recv.mul_bigint(r_fr.into_bigint());
                 let shared_comp = dero_crypto::curve::encode_compressed(&shared_pt);
                 let shared_key = dero_crypto::keccak::keccak256(&shared_comp);
-                let enc_key = dero_crypto::keccak::keccak256(&[&shared_key[..], &hex_decode(&recv_hex)?[..]].concat());
+                let enc_key = dero_crypto::keccak::keccak256(
+                    &[&shared_key[..], &hex_decode(&recv_hex)?[..]].concat(),
+                );
                 Ok(json!({"shared_point": hex::encode(shared_comp),
                           "shared_key": hex::encode(shared_key),
                           "enc_key": hex::encode(enc_key)}))
@@ -1018,13 +1240,19 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     .map_err(|e| format!("deserialize: {e}"))?;
                 let bpp = tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(2);
                 let txid = tx.get_hash(bpp);
-                let mut scid_map: std::collections::HashMap<[u8; 32], i32> = std::collections::HashMap::new();
+                let mut scid_map: std::collections::HashMap<[u8; 32], i32> =
+                    std::collections::HashMap::new();
                 let mut all_ok = true;
                 for (_i, p) in tx.payloads.iter().enumerate() {
                     let index = *scid_map.get(&p.scid).unwrap_or(&0);
                     if let Some(proof) = &p.proof {
                         let ok = dero_crypto::bulletproof::verify(
-                            &p.scid, index, &p.statement, proof, &txid, p.burn_value,
+                            &p.scid,
+                            index,
+                            &p.statement,
+                            proof,
+                            &txid,
+                            p.burn_value,
                         );
                         if !ok {
                             all_ok = false;
@@ -1051,8 +1279,7 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     le[i] = seed[31 - i];
                 }
                 let secret = ark_bn254::Fr::from_le_bytes_mod_order(&le);
-                let sender = dero_crypto::hash_to_point::base_g()
-                    .mul_bigint(secret.into_bigint());
+                let sender = dero_crypto::hash_to_point::base_g().mul_bigint(secret.into_bigint());
                 let our_key = dero_crypto::curve::encode_compressed(&sender);
                 let height: u64 = s("height")?.parse().map_err(|e| format!("height: {e}"))?;
                 let topoheight: u64 = s("topoheight")?.parse().map_err(|e| format!("topo: {e}"))?;
@@ -1114,14 +1341,15 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     // prev_ebal.right = crn[pos] - D.
                     let prev_left = st.cln.get(pos).copied().unwrap_or_default()
                         - st.c.get(pos).copied().unwrap_or_default();
-                    let prev_right = st.crn.get(pos).copied().unwrap_or_default()
-                        - st.d;
+                    let prev_right = st.crn.get(pos).copied().unwrap_or_default() - st.d;
                     let prev_ebal = dero_crypto::elgamal::ElGamal::new(prev_left, prev_right);
                     // changed = prev + changes
                     let changes = dero_crypto::elgamal::ElGamal::new(st.c[pos], st.d);
                     let changed_e = prev_ebal.add(&changes);
-                    let prev_v = dero_crypto::wallet::decode_balance(&prev_ebal, &secret, 44).unwrap_or(0);
-                    let changed_v = dero_crypto::wallet::decode_balance(&changed_e, &secret, 44).unwrap_or(0);
+                    let prev_v =
+                        dero_crypto::wallet::decode_balance(&prev_ebal, &secret, 44).unwrap_or(0);
+                    let changed_v =
+                        dero_crypto::wallet::decode_balance(&changed_e, &secret, 44).unwrap_or(0);
                     let fees = st.fees;
                     let (incoming, status, amount) = if prev_v == changed_v {
                         (false, 0, 0) // ring member
@@ -1201,8 +1429,12 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 }))
             }
             "pedersen_commit_scalar" => {
-                let value: [u8; 32] = hex_decode(&s("value")?)?.try_into().map_err(|_| "value must be 32 bytes")?;
-                let r: [u8; 32] = hex_decode(&s("randomness")?)?.try_into().map_err(|_| "randomness must be 32 bytes")?;
+                let value: [u8; 32] = hex_decode(&s("value")?)?
+                    .try_into()
+                    .map_err(|_| "value must be 32 bytes")?;
+                let r: [u8; 32] = hex_decode(&s("randomness")?)?
+                    .try_into()
+                    .map_err(|_| "randomness must be 32 bytes")?;
                 let p = pedersen::generator_params(128);
                 let point = pedersen::pedersen_commit_scalar(&p, &value, &r);
                 Ok(json!({"point": point_to_hex(&point)}))
@@ -1210,7 +1442,9 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "pedersen_commit" => {
                 let gv = FieldVector::from_hex(&str_list(inp, "gvalues")?);
                 let hv = FieldVector::from_hex(&str_list(inp, "hvalues")?);
-                let r: [u8; 32] = hex_decode(&s("randomness")?)?.try_into().map_err(|_| "randomness must be 32 bytes")?;
+                let r: [u8; 32] = hex_decode(&s("randomness")?)?
+                    .try_into()
+                    .map_err(|_| "randomness must be 32 bytes")?;
                 let p = pedersen::generator_params(128);
                 let point = pedersen::pedersen_commit(&p, &gv, &hv, &r);
                 Ok(json!({"point": point_to_hex(&point)}))
@@ -1258,7 +1492,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 Ok(json!({"scalar": hex::encode(fr_to_be_bytes(a.sum()))}))
             }
             "pointvector_multexp" => {
-                let pts = str_list(inp, "points")?.iter().map(|h| ppoint_from_hex(h)).collect::<Vec<_>>();
+                let pts = str_list(inp, "points")?
+                    .iter()
+                    .map(|h| ppoint_from_hex(h))
+                    .collect::<Vec<_>>();
                 let exps = FieldVector::from_hex(&str_list(inp, "exps")?);
                 let point = pedersen::multi_exp(&pts, &exps);
                 Ok(json!({"point": point_to_hex(&point)}))
@@ -1269,7 +1506,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 Ok(json!({"c": fft::fft_fieldvector(&a, inv).to_hex()}))
             }
             "fft_generatorvector" => {
-                let pts = str_list(inp, "points")?.iter().map(|h| ppoint_from_hex(h)).collect::<Vec<_>>();
+                let pts = str_list(inp, "points")?
+                    .iter()
+                    .map(|h| ppoint_from_hex(h))
+                    .collect::<Vec<_>>();
                 let inv = s("inverse")? == "1";
                 let pv = PointVector::new(pts);
                 let res = fft::fft_generatorvector(&pv, inv);
@@ -1277,7 +1517,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             }
             "convolution" => {
                 let exps = FieldVector::from_hex(&str_list(inp, "exps")?);
-                let pts = str_list(inp, "points")?.iter().map(|h| ppoint_from_hex(h)).collect::<Vec<_>>();
+                let pts = str_list(inp, "points")?
+                    .iter()
+                    .map(|h| ppoint_from_hex(h))
+                    .collect::<Vec<_>>();
                 let pv = PointVector::new(pts);
                 let res = fft::convolution(&exps, &pv);
                 Ok(json!({"points": res.0.iter().map(point_to_hex).collect::<Vec<_>>()}))
@@ -1294,14 +1537,17 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let a_fr = a.iter().map(|x| fr_from_be_bytes(x)).collect::<Vec<_>>();
                 let b_fr = b.iter().map(|x| fr_from_be_bytes(x)).collect::<Vec<_>>();
                 let list = polynomial::recursive_polynomials(&Polynomial::new(None), &a_fr, &b_fr);
-                let out: Vec<Vec<String>> = list.iter()
+                let out: Vec<Vec<String>> = list
+                    .iter()
                     .map(|p| p.coefficients.iter().map(hex::encode).collect())
                     .collect();
                 Ok(json!({"list": out}))
             }
             "reducedhash" => {
                 let data = hex_decode(&s("data")?)?;
-                Ok(json!({"scalar": hex::encode(fr_to_be_bytes(innerproduct::reduced_hash(&data)))}))
+                Ok(
+                    json!({"scalar": hex::encode(fr_to_be_bytes(innerproduct::reduced_hash(&data)))}),
+                )
             }
             "ip_generate" => {
                 let as_ = FieldVector::from_hex(&str_list(inp, "as")?);
@@ -1309,7 +1555,9 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 if as_.length() != bs.length() {
                     return Err("as/bs length mismatch".into());
                 }
-                let salt: [u8; 32] = hex_decode(&s("salt")?)?.try_into().map_err(|_| "salt must be 32 bytes")?;
+                let salt: [u8; 32] = hex_decode(&s("salt")?)?
+                    .try_into()
+                    .map_err(|_| "salt must be 32 bytes")?;
                 let params = pedersen::generator_params(128);
                 let p = innerproduct::honest_p(&params, &as_, &bs);
                 let ip = innerproduct::generate(&params, &p, &as_, &bs, &salt);
@@ -1328,13 +1576,28 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 }))
             }
             "ip_verify" => {
-                let a: [u8; 32] = hex_decode(&s("a")?)?.try_into().map_err(|_| "a must be 32 bytes")?;
-                let b: [u8; 32] = hex_decode(&s("b")?)?.try_into().map_err(|_| "b must be 32 bytes")?;
-                let salt: [u8; 32] = hex_decode(&s("salt")?)?.try_into().map_err(|_| "salt must be 32 bytes")?;
+                let a: [u8; 32] = hex_decode(&s("a")?)?
+                    .try_into()
+                    .map_err(|_| "a must be 32 bytes")?;
+                let b: [u8; 32] = hex_decode(&s("b")?)?
+                    .try_into()
+                    .map_err(|_| "b must be 32 bytes")?;
+                let salt: [u8; 32] = hex_decode(&s("salt")?)?
+                    .try_into()
+                    .map_err(|_| "salt must be 32 bytes")?;
                 let p = ppoint_from_hex(&s("p")?);
-                let ls = str_list(inp, "ls")?.iter().map(|h| ppoint_from_hex(h)).collect::<Vec<_>>();
-                let rs = str_list(inp, "rs")?.iter().map(|h| ppoint_from_hex(h)).collect::<Vec<_>>();
-                let hs = str_list(inp, "hs")?.iter().map(|h| ppoint_from_hex(h)).collect::<Vec<_>>();
+                let ls = str_list(inp, "ls")?
+                    .iter()
+                    .map(|h| ppoint_from_hex(h))
+                    .collect::<Vec<_>>();
+                let rs = str_list(inp, "rs")?
+                    .iter()
+                    .map(|h| ppoint_from_hex(h))
+                    .collect::<Vec<_>>();
+                let hs = str_list(inp, "hs")?
+                    .iter()
+                    .map(|h| ppoint_from_hex(h))
+                    .collect::<Vec<_>>();
                 let params = pedersen::generator_params(128);
                 let ip = innerproduct::InnerProduct { a, b, ls, rs };
                 let verified = innerproduct::verify(&ip, &hs, &params.h, &p, &salt, &params);
@@ -1345,11 +1608,19 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let burn: u64 = s("burn")?.parse().map_err(|e| format!("burn: {}", e))?;
                 realistic_statement(&mut st.0, &st.1, burn);
                 let rand = hex_decode(&s("rand")?)?;
-                let scid: [u8; 32] = hex_decode(&s("scid")?)?.try_into().map_err(|_| "scid must be 32 bytes")?;
-                let scid_index: i32 = s("scid_index")?.parse().map_err(|e| format!("scid_index: {}", e))?;
-                let txid: [u8; 32] = hex_decode(&s("txid")?)?.try_into().map_err(|_| "txid must be 32 bytes")?;
+                let scid: [u8; 32] = hex_decode(&s("scid")?)?
+                    .try_into()
+                    .map_err(|_| "scid must be 32 bytes")?;
+                let scid_index: i32 = s("scid_index")?
+                    .parse()
+                    .map_err(|e| format!("scid_index: {}", e))?;
+                let txid: [u8; 32] = hex_decode(&s("txid")?)?
+                    .try_into()
+                    .map_err(|_| "txid must be 32 bytes")?;
                 let u = ppoint_from_hex(&s("u")?);
-                let proof = bulletproof::generate_proof(&scid, scid_index, &st.0, &st.1, &u, &txid, burn, &rand);
+                let proof = bulletproof::generate_proof(
+                    &scid, scid_index, &st.0, &st.1, &u, &txid, burn, &rand,
+                );
                 let ser = bulletproof::serialize(&proof);
                 let self_ok = bulletproof::verify(&scid, scid_index, &st.0, &proof, &txid, burn);
                 Ok(json!({
@@ -1363,50 +1634,69 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 // corrupted statements can make decode_compressed fail
                 // ("not a square mod P") — map to a clean REJECT, matching
                 // the Go reference's panic->reject mapping.
-                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<serde_json::Value, String> {
-                    let mut st = statement_from_in(inp)?;
-                    let burn: u64 = s("burn")?.parse().map_err(|e| format!("burn: {}", e))?;
-                    // when the full statement (cln/crn/c/d) is supplied, use it
-                    // verbatim (valid-tx accept testing)
-                    let has_cln = inp.contains_key("cln");
-                    if has_cln {
-                        let plist = |k: &str| -> Result<Vec<G1Projective>, String> {
-                            let arr = inp.get(k).and_then(|v| v.as_array()).ok_or(format!("missing {}", k))?;
-                            arr.iter().map(|v| {
-                                let h = v.as_str().ok_or("hex")?;
-                                let b = hex::decode(h).map_err(|e| e.to_string())?;
-                                decode_compressed(&b)
-                            }).collect()
-                        };
-                        st.0.cln = plist("cln")?;
-                        st.0.crn = plist("crn")?;
-                        st.0.c = plist("c")?;
-                        st.0.d = {
-                            let b = hex::decode(&s("d")?).map_err(|e| e.to_string())?;
-                            decode_compressed(&b)?
-                        };
-                    } else {
-                        realistic_statement(&mut st.0, &st.1, burn);
-                    }
-                    let proof_b = hex_decode(&s("proof")?)?;
-                    let scid: [u8; 32] = hex_decode(&s("scid")?)?.try_into().map_err(|_| "scid must be 32 bytes")?;
-                    let scid_index: i32 = s("scid_index")?.parse().map_err(|e| format!("scid_index: {}", e))?;
-                    let txid: [u8; 32] = hex_decode(&s("txid")?)?.try_into().map_err(|_| "txid must be 32 bytes")?;
-                    // deserialize: parse the proof struct from the byte stream
-                    let proof = deserialize_proof(&proof_b, st.0.publickeylist.len() / 2)?;
-                    let verified = bulletproof::verify(&scid, scid_index, &st.0, &proof, &txid, burn);
-                    Ok(json!({"verified": verified}))
-                }));
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || -> Result<serde_json::Value, String> {
+                        let mut st = statement_from_in(inp)?;
+                        let burn: u64 = s("burn")?.parse().map_err(|e| format!("burn: {}", e))?;
+                        // when the full statement (cln/crn/c/d) is supplied, use it
+                        // verbatim (valid-tx accept testing)
+                        let has_cln = inp.contains_key("cln");
+                        if has_cln {
+                            let plist = |k: &str| -> Result<Vec<G1Projective>, String> {
+                                let arr = inp
+                                    .get(k)
+                                    .and_then(|v| v.as_array())
+                                    .ok_or(format!("missing {}", k))?;
+                                arr.iter()
+                                    .map(|v| {
+                                        let h = v.as_str().ok_or("hex")?;
+                                        let b = hex::decode(h).map_err(|e| e.to_string())?;
+                                        decode_compressed(&b)
+                                    })
+                                    .collect()
+                            };
+                            st.0.cln = plist("cln")?;
+                            st.0.crn = plist("crn")?;
+                            st.0.c = plist("c")?;
+                            st.0.d = {
+                                let b = hex::decode(&s("d")?).map_err(|e| e.to_string())?;
+                                decode_compressed(&b)?
+                            };
+                        } else {
+                            realistic_statement(&mut st.0, &st.1, burn);
+                        }
+                        let proof_b = hex_decode(&s("proof")?)?;
+                        let scid: [u8; 32] = hex_decode(&s("scid")?)?
+                            .try_into()
+                            .map_err(|_| "scid must be 32 bytes")?;
+                        let scid_index: i32 = s("scid_index")?
+                            .parse()
+                            .map_err(|e| format!("scid_index: {}", e))?;
+                        let txid: [u8; 32] = hex_decode(&s("txid")?)?
+                            .try_into()
+                            .map_err(|_| "txid must be 32 bytes")?;
+                        // deserialize: parse the proof struct from the byte stream
+                        let proof = deserialize_proof(&proof_b, st.0.publickeylist.len() / 2)?;
+                        let verified =
+                            bulletproof::verify(&scid, scid_index, &st.0, &proof, &txid, burn);
+                        Ok(json!({"verified": verified}))
+                    },
+                ));
                 match res {
                     Ok(Ok(v)) => Ok(v),
                     _ => Ok(json!({"verified": false})),
                 }
             }
             "noncebalance_marshal" => {
-                let nh: u64 = s("nonceheight")?.parse().map_err(|e| format!("nonceheight: {}", e))?;
+                let nh: u64 = s("nonceheight")?
+                    .parse()
+                    .map_err(|e| format!("nonceheight: {}", e))?;
                 let bal_b = hex_decode(&s("balance")?)?;
                 let bal = dero_crypto::elgamal::ElGamal::deserialize(&bal_b)?;
-                let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: nh, balance: bal };
+                let nb = dero_crypto::balance_serdes::NonceBalance {
+                    nonce_height: nh,
+                    balance: bal,
+                };
                 Ok(json!({"bytes": hex::encode(nb.serialize())}))
             }
             "noncebalance_unmarshal" => {
@@ -1447,17 +1737,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             "tx_deserialize" => {
                 let b = hex_decode(&s("bytes")?)?;
                 let tx = dero_crypto::transaction::Transaction::deserialize(&b, 3)?;
-                let payload_scids: Vec<String> = tx
-                    .payloads
-                    .iter()
-                    .map(|p| hex::encode(&p.scid))
-                    .collect();
+                let payload_scids: Vec<String> =
+                    tx.payloads.iter().map(|p| hex::encode(&p.scid)).collect();
                 // serialize with the statement's OWN bpp (wallet txs use 2)
-                let sbpp = tx
-                    .payloads
-                    .first()
-                    .map(|p| p.statement.bpp())
-                    .unwrap_or(3);
+                let sbpp = tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(3);
                 Ok(json!({
                     "bytes": hex::encode(tx.serialize(sbpp)),
                     "hash": hex::encode(tx.get_hash(sbpp)),
@@ -1511,15 +1794,23 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let b = hex_decode(&s("blob")?)?;
                 let bl = dero_crypto::block::Block::deserialize(&b)?;
                 let genesis = s_key(inp, "genesis").map(|v| v == "true").unwrap_or(false);
-                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let height: u64 = s_key(inp, "height")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
                 let bt = grav_tree_mut("B");
                 if !genesis {
                     // ensure the miner is registered (zero balance) so the
                     // reward add works; real chain has it from an earlier tx
                     if bt.get(&bl.miner_tx.miner_address.to_vec()).is_none() {
-                        if let Ok(pk) = dero_crypto::curve::decode_compressed(&bl.miner_tx.miner_address) {
+                        if let Ok(pk) =
+                            dero_crypto::curve::decode_compressed(&bl.miner_tx.miner_address)
+                        {
                             let zb = ElGamal::new(pk, base_g());
-                            let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+                            let nb = dero_crypto::balance_serdes::NonceBalance {
+                                nonce_height: 0,
+                                balance: zb,
+                            };
                             bt.put(&bl.miner_tx.miner_address, &nb.serialize());
                         }
                     }
@@ -1536,22 +1827,40 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         let hexb = tb.as_str().ok_or("tx hex")?;
                         let raw = hex_decode(hexb)?;
                         let tx = dero_crypto::transaction::Transaction::deserialize(&raw, 3)?;
-                        fees += chain::process_transaction(&mut std::collections::HashMap::new(), &tx, bt, height, true);
+                        fees += chain::process_transaction(
+                            &mut std::collections::HashMap::new(),
+                            &tx,
+                            bt,
+                            height,
+                            true,
+                        );
                         if tx.tx_type == dero_crypto::transaction::TX_SC {
                             // process_transaction_sc: install/call + SC_META
                             // + SCID data tree writes
                             let mut cache = std::collections::HashMap::new();
-                            let mut ss = dero_crypto::sc::Snapshot { trees: std::collections::HashMap::new() };
+                            let mut ss = dero_crypto::sc::Snapshot {
+                                trees: std::collections::HashMap::new(),
+                            };
                             let blid = bl.get_hash();
                             let r = chain::process_transaction_sc(
-                                &mut cache, &mut ss, bt, mt, height, height, 0,
-                                &blid, &tx, Some(0), // K0 floor: active from height 0 in simulator
+                                &mut cache,
+                                &mut ss,
+                                bt,
+                                mt,
+                                height,
+                                height,
+                                0,
+                                &blid,
+                                &tx,
+                                Some(0), // K0 floor: active from height 0 in simulator
                             );
                             if let Err(e) = &r {
                                 eprintln!("SC apply err at h{}: {}", height, e);
                             }
                             // expose the SCID data-tree hash for the harness
-                            let txid = tx.get_hash(tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(3));
+                            let txid = tx.get_hash(
+                                tx.payloads.first().map(|p| p.statement.bpp()).unwrap_or(3),
+                            );
                             if let Some(dt) = cache.get(&txid) {
                                 eprintln!("SC data tree hash: {}", hex::encode(dt.hash()));
                                 eprintln!("SC data tree dump: {}", hex::encode(dt.debug_dump()));
@@ -1560,8 +1869,13 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     }
                 }
                 chain::process_miner_transaction(
-                    &bl.miner_tx.miner_address, bl.miner_tx.value,
-                    &bl.mini_blocks, genesis, bt, fees, height,
+                    &bl.miner_tx.miner_address,
+                    bl.miner_tx.value,
+                    &bl.mini_blocks,
+                    genesis,
+                    bt,
+                    fees,
+                    height,
                 );
                 Ok(json!({"hash": hex::encode(bt.hash()), "meta_hash": hex::encode(mt.hash())}))
             }
@@ -1571,10 +1885,28 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let hash = tx.get_hash(3);
                 let p = tx.payloads[0].proof.as_ref().unwrap();
                 let st = &tx.payloads[0].statement;
-                let accepted = bulletproof::verify(&tx.payloads[0].scid, 0, st, p, &hash, tx.payloads[0].burn_value);
-                let c_hex: Vec<String> = st.c.iter().map(|x| hex::encode(encode_compressed(x))).collect();
-                let cln_hex: Vec<String> = st.cln.iter().map(|x| hex::encode(encode_compressed(x))).collect();
-                let crn_hex: Vec<String> = st.crn.iter().map(|x| hex::encode(encode_compressed(x))).collect();
+                let accepted = bulletproof::verify(
+                    &tx.payloads[0].scid,
+                    0,
+                    st,
+                    p,
+                    &hash,
+                    tx.payloads[0].burn_value,
+                );
+                let c_hex: Vec<String> =
+                    st.c.iter()
+                        .map(|x| hex::encode(encode_compressed(x)))
+                        .collect();
+                let cln_hex: Vec<String> = st
+                    .cln
+                    .iter()
+                    .map(|x| hex::encode(encode_compressed(x)))
+                    .collect();
+                let crn_hex: Vec<String> = st
+                    .crn
+                    .iter()
+                    .map(|x| hex::encode(encode_compressed(x)))
+                    .collect();
                 Ok(json!({
                     "bytes": hex::encode(ser),
                     "hash": hex::encode(hash),
@@ -1601,10 +1933,14 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     s_key(m, "nonce2")?.parse().unwrap_or(0),
                 ];
                 let mbl = dero_crypto::block::MiniBlock {
-                    version: s_key(m, "version")?.parse::<u8>().map_err(|e| e.to_string())?,
+                    version: s_key(m, "version")?
+                        .parse::<u8>()
+                        .map_err(|e| e.to_string())?,
                     high_diff: m.get("highdiff").and_then(|v| v.as_bool()) == Some(true),
                     final_block: m.get("final").and_then(|v| v.as_bool()) == Some(true),
-                    past_count: s_key(m, "pastcount")?.parse::<u8>().map_err(|e| e.to_string())?,
+                    past_count: s_key(m, "pastcount")?
+                        .parse::<u8>()
+                        .map_err(|e| e.to_string())?,
                     timestamp: s_key(m, "timestamp")?.parse().unwrap_or(0),
                     height: s_key(m, "height")?.parse().unwrap_or(0),
                     past,
@@ -1655,7 +1991,9 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             }
             "check_pow" => {
                 let h = hex_decode(&s("hash")?)?;
-                let difficulty: num_bigint::BigUint = s("difficulty")?.parse().map_err(|e: num_bigint::ParseBigIntError| e.to_string())?;
+                let difficulty: num_bigint::BigUint = s("difficulty")?
+                    .parse()
+                    .map_err(|e: num_bigint::ParseBigIntError| e.to_string())?;
                 // HashToBig: reverse to big-endian, then compare to 2^256/diff
                 let mut rev = [0u8; 32];
                 for i in 0..16 {
@@ -1678,13 +2016,24 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         out.insert("functions".into(), json!(names));
                         for name in &names {
                             let f = &sc.functions[name];
-                            let paramtypes: Vec<String> = f.params.iter().map(|p| format!("{}", p.vtype as u8)).collect();
-                            let lines: Vec<String> = f.line_numbers.iter().map(|ln| format!("{}:{}", ln, f.lines[ln].join(" "))).collect();
-                            out.insert(format!("fn_{}", name), json!({
-                                "ret": (f.return_value.vtype as u8).to_string(),
-                                "params": paramtypes,
-                                "lines": lines,
-                            }));
+                            let paramtypes: Vec<String> = f
+                                .params
+                                .iter()
+                                .map(|p| format!("{}", p.vtype as u8))
+                                .collect();
+                            let lines: Vec<String> = f
+                                .line_numbers
+                                .iter()
+                                .map(|ln| format!("{}:{}", ln, f.lines[ln].join(" ")))
+                                .collect();
+                            out.insert(
+                                format!("fn_{}", name),
+                                json!({
+                                    "ret": (f.return_value.vtype as u8).to_string(),
+                                    "params": paramtypes,
+                                    "lines": lines,
+                                }),
+                            );
                         }
                         Ok(serde_json::Value::Object(out))
                     }
@@ -1708,9 +2057,13 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                                         break;
                                     }
                                 }
-                                if uses_signer { break; }
+                                if uses_signer {
+                                    break;
+                                }
                             }
-                            if uses_signer { break; }
+                            if uses_signer {
+                                break;
+                            }
                         }
                         Ok(json!({"ok": true, "uses_signer": uses_signer}))
                     }
@@ -1731,7 +2084,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let blid = hx("blid");
                 let txid = hx("txid");
                 let mut r: Rnd = initialize_rnd(&scid, &blid, &txid);
-                let n: u64 = s_key(inp, "n").unwrap_or_else(|_| "5".into()).parse().unwrap_or(5);
+                let n: u64 = s_key(inp, "n")
+                    .unwrap_or_else(|_| "5".into())
+                    .parse()
+                    .unwrap_or(5);
                 let mut vals = Vec::new();
                 for _ in 0..n {
                     vals.push(r.random().to_string());
@@ -1754,12 +2110,20 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let blid = hx("blid");
                 let txid = hx("txid");
                 let entrypoint = s("entrypoint")?;
-                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
-                let ts: u64 = s_key(inp, "timestamp").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let height: u64 = s_key(inp, "height")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
+                let ts: u64 = s_key(inp, "timestamp")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
                 let signer = s_key(inp, "signer").unwrap_or_default();
                 let mut params: HashMap<String, String> = HashMap::new();
                 if let Some(v) = inp.get("params") {
-                    if let Ok(pm) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&v.to_string()) {
+                    if let Ok(pm) =
+                        serde_json::from_str::<HashMap<String, serde_json::Value>>(&v.to_string())
+                    {
                         for (k, val) in pm {
                             params.insert(k, val.as_str().unwrap_or("").to_string());
                         }
@@ -1775,8 +2139,13 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     gas_store_limit: 0,
                     gas_store_check: false,
                     chain_inputs: BlockchainInput {
-                        scid, blid, txid, signer,
-                        bl_height: height, bl_topoheight: 0, bl_timestamp: ts,
+                        scid,
+                        blid,
+                        txid,
+                        signer,
+                        bl_height: height,
+                        bl_topoheight: 0,
+                        bl_timestamp: ts,
                     },
                     assets: HashMap::new(),
                     assets_transfer: HashMap::new(),
@@ -1784,16 +2153,30 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                     monitor_recursion: 0,
                     monitor_lines_interpreted: 0,
                     monitor_ops: 0,
-                    store: Box::new(TXStorage { scid, raw_keys: HashMap::new(), transfers: HashMap::new(), state: None }),
+                    store: Box::new(TXStorage {
+                        scid,
+                        raw_keys: HashMap::new(),
+                        transfers: HashMap::new(),
+                        state: None,
+                    }),
                     rnd: initialize_rnd(&scid, &blid, &txid),
                 };
                 state.store.state = Some(state.clone());
                 let result = run_smart_contract(&sc, &entrypoint, &mut state, &params);
                 let mut out = serde_json::Map::new();
-                out.insert("gas_compute".into(), json!(state.gas_compute_used.to_string()));
-                out.insert("gas_storage".into(), json!(state.gas_store_used.to_string()));
+                out.insert(
+                    "gas_compute".into(),
+                    json!(state.gas_compute_used.to_string()),
+                );
+                out.insert(
+                    "gas_storage".into(),
+                    json!(state.gas_store_used.to_string()),
+                );
                 out.insert("ops".into(), json!(state.monitor_ops.to_string()));
-                out.insert("lines".into(), json!(state.monitor_lines_interpreted.to_string()));
+                out.insert(
+                    "lines".into(),
+                    json!(state.monitor_lines_interpreted.to_string()),
+                );
                 match result {
                     Ok(v) => {
                         out.insert("ok".into(), json!(true));
@@ -1801,8 +2184,12 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         // match it so the differential diff is byte-exact.
                         out.insert("ret_type".into(), json!((v.vtype as u8).to_string()));
                         match v.vtype {
-                            Vtype::Uint64 => { out.insert("ret".into(), json!(v.value_uint64.to_string())); }
-                            Vtype::String => { out.insert("ret".into(), json!(v.value_string)); }
+                            Vtype::Uint64 => {
+                                out.insert("ret".into(), json!(v.value_uint64.to_string()));
+                            }
+                            Vtype::String => {
+                                out.insert("ret".into(), json!(v.value_string));
+                            }
                             _ => {}
                         }
                         let mut keys: Vec<&String> = state.store.raw_keys.keys().collect();
@@ -1815,7 +2202,8 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         // Emit external transfers (SEND_*) accumulated during
                         // execution, mirroring the Go oracle's dvm_run output so
                         // difftest can compare send_external byte-for-byte.
-                        let mut senders: Vec<[u8; 32]> = state.store.transfers.keys().cloned().collect();
+                        let mut senders: Vec<[u8; 32]> =
+                            state.store.transfers.keys().cloned().collect();
                         senders.sort();
                         let mut transfers = Vec::new();
                         for sender in senders {
@@ -1883,34 +2271,51 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 out.insert("txid".into(), json!(hex::encode(txid)));
                 for p in &tx.payloads {
                     let st = &p.statement;
-                    let pk: Vec<String> = st.publickeylist.iter().map(|k| hex::encode(encode_compressed(k))).collect();
-                    let cln: Vec<String> = st.cln.iter().map(|k| hex::encode(encode_compressed(k))).collect();
-                    let crn: Vec<String> = st.crn.iter().map(|k| hex::encode(encode_compressed(k))).collect();
-                    let c: Vec<String> = st.c.iter().map(|k| hex::encode(encode_compressed(k))).collect();
+                    let pk: Vec<String> = st
+                        .publickeylist
+                        .iter()
+                        .map(|k| hex::encode(encode_compressed(k)))
+                        .collect();
+                    let cln: Vec<String> = st
+                        .cln
+                        .iter()
+                        .map(|k| hex::encode(encode_compressed(k)))
+                        .collect();
+                    let crn: Vec<String> = st
+                        .crn
+                        .iter()
+                        .map(|k| hex::encode(encode_compressed(k)))
+                        .collect();
+                    let c: Vec<String> =
+                        st.c.iter()
+                            .map(|k| hex::encode(encode_compressed(k)))
+                            .collect();
                     // run the full verify on the real statement (whatever it
                     // carries after deserialize — same as the Go side)
                     let proof = p.proof.clone().expect("miner tx proof present");
                     let verified = bulletproof::verify(&p.scid, 0, st, &proof, &txid, p.burn_value);
                     let proof_ser = bulletproof::serialize(&proof);
-                    out.insert("payload".into(), json!({
-                        "scid": hex::encode(p.scid),
-                        "scid_index": 0,
-                        "burn": p.burn_value.to_string(),
-                        "publickeys": pk,
-                        "cln": cln,
-                        "crn": crn,
-                        "c": c,
-                        "d": hex::encode(encode_compressed(&st.d)),
-                        "roothash": hex::encode(st.roothash),
-                        "fees": st.fees.to_string(),
-                        "proof": hex::encode(proof_ser),
-                        "verified": verified,
-                    }));
+                    out.insert(
+                        "payload".into(),
+                        json!({
+                            "scid": hex::encode(p.scid),
+                            "scid_index": 0,
+                            "burn": p.burn_value.to_string(),
+                            "publickeys": pk,
+                            "cln": cln,
+                            "crn": crn,
+                            "c": c,
+                            "d": hex::encode(encode_compressed(&st.d)),
+                            "roothash": hex::encode(st.roothash),
+                            "fees": st.fees.to_string(),
+                            "proof": hex::encode(proof_ser),
+                            "verified": verified,
+                        }),
+                    );
                 }
                 Ok(serde_json::Value::Object(out))
             }
             "grav_put" | "grav_delete" | "grav_get" => {
-                
                 let tname = s("tree")?;
                 let tree = grav_tree_mut(&tname);
                 let key = hex_decode(&s("key")?)?;
@@ -1924,12 +2329,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         tree.delete(&key);
                         Ok(json!({"hash": hex::encode(tree.hash())}))
                     }
-                    _ => {
-                        match tree.get(&key) {
-                            Some(v) => Ok(json!({"found": true, "value": hex::encode(v)})),
-                            None => Ok(json!({"found": false})),
-                        }
-                    }
+                    _ => match tree.get(&key) {
+                        Some(v) => Ok(json!({"found": true, "value": hex::encode(v)})),
+                        None => Ok(json!({"found": false})),
+                    },
                 }
             }
             "grav_register" => {
@@ -1940,7 +2343,10 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let pk = dero_crypto::curve::decode_compressed(&addr).map_err(|e| e)?;
                 // Go ConstructElGamal(pk, ElGamal_BASE_G): Left = pk, Right = G
                 let zerobalance = ElGamal::new(pk, base_g());
-                let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zerobalance };
+                let nb = dero_crypto::balance_serdes::NonceBalance {
+                    nonce_height: 0,
+                    balance: zerobalance,
+                };
                 grav_tree_mut(&tname).put(&addr, &nb.serialize());
                 Ok(json!({"registered": true}))
             }
@@ -1967,9 +2373,8 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 if ringsize == 0 || ringsize > 128 {
                     return Err(format!("ringsize {ringsize} out of range 1..=128"));
                 }
-                let reject = height >= floor
-                    && ringsize < 4
-                    && (txtype == TX_NORMAL || txtype == TX_BURN);
+                let reject =
+                    height >= floor && ringsize < 4 && (txtype == TX_NORMAL || txtype == TX_BURN);
                 Ok(json!({"reject": reject}))
             }
             "b2_reject" => {
@@ -1995,34 +2400,63 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             }
             "chain_miner_tx" => {
                 use dero_crypto::chain;
-                
+
                 let genesis = s_key(inp, "genesis").map(|v| v == "true").unwrap_or(false);
-                let fees: u64 = s_key(inp, "fees").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
-                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let fees: u64 = s_key(inp, "fees")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
+                let height: u64 = s_key(inp, "height")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
                 let miner_addr = hex_decode(&s("miner_address")?)?;
                 let mut addr = [0u8; 33];
                 addr.copy_from_slice(&miner_addr);
-                let miner_value: u64 = s_key(inp, "miner_value").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let miner_value: u64 = s_key(inp, "miner_value")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
                 // persistent "B" tree (shared with grav_register/grav_put)
                 let bt = grav_tree_mut("B");
                 // miniblocks from JSON
                 let mut mbls = Vec::new();
                 if let Some(v) = inp.get("miniblocks") {
-                    if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&v.to_string()) {
+                    if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&v.to_string())
+                    {
                         for m in arr {
-                            let kh = hex::decode(m.get("KeyHash").and_then(|x| x.as_str()).unwrap_or("")).unwrap_or_default();
+                            let kh = hex::decode(
+                                m.get("KeyHash").and_then(|x| x.as_str()).unwrap_or(""),
+                            )
+                            .unwrap_or_default();
                             let mut kh32 = [0u8; 32];
                             let n = kh.len().min(32);
                             kh32[..n].copy_from_slice(&kh[..n]);
                             mbls.push(dero_crypto::block::MiniBlock {
-                                version: m.get("Version").and_then(|x| x.as_u64()).unwrap_or(1) as u8,
+                                version: m.get("Version").and_then(|x| x.as_u64()).unwrap_or(1)
+                                    as u8,
                                 high_diff: false,
-                                final_block: m.get("Final").and_then(|x| x.as_bool()).unwrap_or(false),
-                                past_count: m.get("PastCount").and_then(|x| x.as_u64()).unwrap_or(1) as u8,
-                                timestamp: m.get("Timestamp").and_then(|x| x.as_u64()).unwrap_or(0) as u16,
+                                final_block: m
+                                    .get("Final")
+                                    .and_then(|x| x.as_bool())
+                                    .unwrap_or(false),
+                                past_count: m.get("PastCount").and_then(|x| x.as_u64()).unwrap_or(1)
+                                    as u8,
+                                timestamp: m.get("Timestamp").and_then(|x| x.as_u64()).unwrap_or(0)
+                                    as u16,
                                 height: m.get("Height").and_then(|x| x.as_u64()).unwrap_or(0),
-                                past: [m.get("Past").and_then(|x| x.as_array()).and_then(|a| a.get(0)).and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-                                       m.get("Past").and_then(|x| x.as_array()).and_then(|a| a.get(1)).and_then(|x| x.as_u64()).unwrap_or(0) as u32],
+                                past: [
+                                    m.get("Past")
+                                        .and_then(|x| x.as_array())
+                                        .and_then(|a| a.get(0))
+                                        .and_then(|x| x.as_u64())
+                                        .unwrap_or(0) as u32,
+                                    m.get("Past")
+                                        .and_then(|x| x.as_array())
+                                        .and_then(|a| a.get(1))
+                                        .and_then(|x| x.as_u64())
+                                        .unwrap_or(0) as u32,
+                                ],
                                 key_hash: kh32,
                                 flags: m.get("Flags").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
                                 nonce: [0, 0, 0],
@@ -2030,27 +2464,45 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                         }
                     }
                 }
-                chain::process_miner_transaction(&addr, miner_value, &mbls, genesis, bt, fees, height);
+                chain::process_miner_transaction(
+                    &addr,
+                    miner_value,
+                    &mbls,
+                    genesis,
+                    bt,
+                    fees,
+                    height,
+                );
                 Ok(json!({"hash": hex::encode(bt.hash())}))
             }
             "chain_tx" => {
                 use dero_crypto::chain;
                 use dero_crypto::elgamal::ElGamal;
                 use dero_crypto::hash_to_point::base_g;
-                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let height: u64 = s_key(inp, "height")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
                 let bt = grav_tree_mut("B");
                 // register ring keys from JSON
                 if let Some(payv) = inp.get("payloads") {
-                    if let Ok(pays) = serde_json::from_str::<Vec<serde_json::Value>>(&payv.to_string()) {
+                    if let Ok(pays) =
+                        serde_json::from_str::<Vec<serde_json::Value>>(&payv.to_string())
+                    {
                         for pj in pays {
                             let stmt = &pj["statement"];
-                            if let Some(pks) = stmt.get("publickeylist").and_then(|x| x.as_array()) {
+                            if let Some(pks) = stmt.get("publickeylist").and_then(|x| x.as_array())
+                            {
                                 for pksv in pks {
                                     let pk_b = hex_decode(&pksv.as_str().unwrap_or(""))?;
                                     if bt.get(&pk_b).is_none() {
-                                        let pk = dero_crypto::curve::decode_compressed(&pk_b).map_err(|e| e)?;
+                                        let pk = dero_crypto::curve::decode_compressed(&pk_b)
+                                            .map_err(|e| e)?;
                                         let zb = ElGamal::new(pk, base_g());
-                                        let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+                                        let nb = dero_crypto::balance_serdes::NonceBalance {
+                                            nonce_height: 0,
+                                            balance: zb,
+                                        };
                                         bt.put(&pk_b, &nb.serialize());
                                     }
                                 }
@@ -2063,7 +2515,11 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 let ser = tx.serialize(3);
                 tx = dero_crypto::transaction::Transaction::deserialize(&ser, 3)?;
                 let fees = chain::process_transaction(
-                    &mut std::collections::HashMap::new(), &tx, bt, height, false,
+                    &mut std::collections::HashMap::new(),
+                    &tx,
+                    bt,
+                    height,
+                    false,
                 );
                 Ok(json!({"hash": hex::encode(bt.hash()), "fees": fees.to_string()}))
             }
@@ -2071,8 +2527,14 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 use dero_crypto::chain;
                 use dero_crypto::elgamal::ElGamal;
                 use dero_crypto::hash_to_point::base_g;
-                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
-                let fees: u64 = s_key(inp, "fees").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let height: u64 = s_key(inp, "height")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
+                let fees: u64 = s_key(inp, "fees")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
                 let bt = grav_tree_mut("B");
                 // miner_tx part
                 let miner_addr = hex_decode(&s("miner_address")?)?;
@@ -2080,21 +2542,41 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 addr.copy_from_slice(&miner_addr);
                 let mut mbls = Vec::new();
                 if let Some(v) = inp.get("miniblocks") {
-                    if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&v.to_string()) {
+                    if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&v.to_string())
+                    {
                         for m in arr {
-                            let kh = hex::decode(m.get("KeyHash").and_then(|x| x.as_str()).unwrap_or("")).unwrap_or_default();
+                            let kh = hex::decode(
+                                m.get("KeyHash").and_then(|x| x.as_str()).unwrap_or(""),
+                            )
+                            .unwrap_or_default();
                             let mut kh32 = [0u8; 32];
                             let n = kh.len().min(32);
                             kh32[..n].copy_from_slice(&kh[..n]);
                             mbls.push(dero_crypto::block::MiniBlock {
-                                version: m.get("Version").and_then(|x| x.as_u64()).unwrap_or(1) as u8,
+                                version: m.get("Version").and_then(|x| x.as_u64()).unwrap_or(1)
+                                    as u8,
                                 high_diff: false,
-                                final_block: m.get("Final").and_then(|x| x.as_bool()).unwrap_or(false),
-                                past_count: m.get("PastCount").and_then(|x| x.as_u64()).unwrap_or(1) as u8,
-                                timestamp: m.get("Timestamp").and_then(|x| x.as_u64()).unwrap_or(0) as u16,
+                                final_block: m
+                                    .get("Final")
+                                    .and_then(|x| x.as_bool())
+                                    .unwrap_or(false),
+                                past_count: m.get("PastCount").and_then(|x| x.as_u64()).unwrap_or(1)
+                                    as u8,
+                                timestamp: m.get("Timestamp").and_then(|x| x.as_u64()).unwrap_or(0)
+                                    as u16,
                                 height: m.get("Height").and_then(|x| x.as_u64()).unwrap_or(0),
-                                past: [m.get("Past").and_then(|x| x.as_array()).and_then(|a| a.get(0)).and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-                                       m.get("Past").and_then(|x| x.as_array()).and_then(|a| a.get(1)).and_then(|x| x.as_u64()).unwrap_or(0) as u32],
+                                past: [
+                                    m.get("Past")
+                                        .and_then(|x| x.as_array())
+                                        .and_then(|a| a.get(0))
+                                        .and_then(|x| x.as_u64())
+                                        .unwrap_or(0) as u32,
+                                    m.get("Past")
+                                        .and_then(|x| x.as_array())
+                                        .and_then(|a| a.get(1))
+                                        .and_then(|x| x.as_u64())
+                                        .unwrap_or(0) as u32,
+                                ],
                                 key_hash: kh32,
                                 flags: m.get("Flags").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
                                 nonce: [0, 0, 0],
@@ -2105,16 +2587,23 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 chain::process_miner_transaction(&addr, 0, &mbls, false, bt, fees, height);
                 // then the txs
                 if let Some(payv) = inp.get("payloads") {
-                    if let Ok(pays) = serde_json::from_str::<Vec<serde_json::Value>>(&payv.to_string()) {
+                    if let Ok(pays) =
+                        serde_json::from_str::<Vec<serde_json::Value>>(&payv.to_string())
+                    {
                         for pj in pays {
                             let stmt = &pj["statement"];
-                            if let Some(pks) = stmt.get("publickeylist").and_then(|x| x.as_array()) {
+                            if let Some(pks) = stmt.get("publickeylist").and_then(|x| x.as_array())
+                            {
                                 for pksv in pks {
                                     let pk_b = hex_decode(&pksv.as_str().unwrap_or(""))?;
                                     if bt.get(&pk_b).is_none() {
-                                        let pk = dero_crypto::curve::decode_compressed(&pk_b).map_err(|e| e)?;
+                                        let pk = dero_crypto::curve::decode_compressed(&pk_b)
+                                            .map_err(|e| e)?;
                                         let zb = ElGamal::new(pk, base_g());
-                                        let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+                                        let nb = dero_crypto::balance_serdes::NonceBalance {
+                                            nonce_height: 0,
+                                            balance: zb,
+                                        };
                                         bt.put(&pk_b, &nb.serialize());
                                     }
                                 }
@@ -2126,7 +2615,11 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                             let ser = tx.serialize(3);
                             tx = dero_crypto::transaction::Transaction::deserialize(&ser, 3)?;
                             chain::process_transaction(
-                                &mut std::collections::HashMap::new(), &tx, bt, height, false,
+                                &mut std::collections::HashMap::new(),
+                                &tx,
+                                bt,
+                                height,
+                                false,
                             );
                         }
                     }
@@ -2134,38 +2627,54 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 Ok(json!({"hash": hex::encode(bt.hash())}))
             }
             "chain_sc_install" => {
-                use dero_crypto::sc::Snapshot;
                 use dero_crypto::graviton::Tree;
+                use dero_crypto::sc::Snapshot;
                 use std::collections::HashMap;
                 let blob = hex_decode(&s("blob")?)?;
                 let tx = dero_crypto::transaction::Transaction::deserialize(&blob, 3)?;
-                let height: u64 = s_key(inp, "height").unwrap_or_else(|_| "0".into()).parse().unwrap_or(0);
+                let height: u64 = s_key(inp, "height")
+                    .unwrap_or_else(|_| "0".into())
+                    .parse()
+                    .unwrap_or(0);
                 // fresh snapshot + cache
-                let mut ss = Snapshot { trees: HashMap::new() };
+                let mut ss = Snapshot {
+                    trees: HashMap::new(),
+                };
                 let mut cache: HashMap<[u8; 32], Tree> = HashMap::new();
                 let mut bt = Tree::new("B");
                 let mut mt = Tree::new("M");
                 let txid = tx.get_hash(3);
                 let scid = txid;
                 // signer: from JSON (harness knows the ring keys)
-                let signer: [u8; 33] = if let Ok(s) = hex_decode(&s_key(inp, "signer").unwrap_or_default()) {
-                    let mut s2 = [0u8; 33];
-                    let n = s.len().min(33);
-                    s2[..n].copy_from_slice(&s[..n]);
-                    s2
-                } else if let Some(p) = tx.payloads.first() {
-                    let st = &p.statement;
-                    if !st.publickeylist.is_empty() {
-                        let pk = dero_crypto::curve::encode_compressed(&st.publickeylist[0]);
+                let signer: [u8; 33] =
+                    if let Ok(s) = hex_decode(&s_key(inp, "signer").unwrap_or_default()) {
                         let mut s2 = [0u8; 33];
-                        s2.copy_from_slice(&pk);
+                        let n = s.len().min(33);
+                        s2[..n].copy_from_slice(&s[..n]);
                         s2
-                    } else { [0u8; 33] }
-                } else { [0u8; 33] };
+                    } else if let Some(p) = tx.payloads.first() {
+                        let st = &p.statement;
+                        if !st.publickeylist.is_empty() {
+                            let pk = dero_crypto::curve::encode_compressed(&st.publickeylist[0]);
+                            let mut s2 = [0u8; 33];
+                            s2.copy_from_slice(&pk);
+                            s2
+                        } else {
+                            [0u8; 33]
+                        }
+                    } else {
+                        [0u8; 33]
+                    };
                 if bt.get(&signer.to_vec()).is_none() {
                     if let Ok(pk) = dero_crypto::curve::decode_compressed(&signer) {
-                        let zb = dero_crypto::elgamal::ElGamal::new(pk, dero_crypto::hash_to_point::base_g());
-                        let nb = dero_crypto::balance_serdes::NonceBalance { nonce_height: 0, balance: zb };
+                        let zb = dero_crypto::elgamal::ElGamal::new(
+                            pk,
+                            dero_crypto::hash_to_point::base_g(),
+                        );
+                        let nb = dero_crypto::balance_serdes::NonceBalance {
+                            nonce_height: 0,
+                            balance: zb,
+                        };
                         bt.put(&signer, &nb.serialize());
                     }
                 }
@@ -2173,17 +2682,21 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
                 // SC_INSTALL + SCCODE, parse + install + run Initialize.
                 // k0_floor is the B1/B2 activation height (Go
                 // K0_MIN_RING4_HEIGHT); omitted => pre-fork (NoSigner never set).
-                let k0_floor = s_key(inp, "k0_floor").ok().and_then(|v| v.parse::<u64>().ok());
+                let k0_floor = s_key(inp, "k0_floor")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok());
                 let gas = match dero_crypto::chain::process_transaction_sc(
-                    &mut cache, &mut ss, &mut bt, &mut mt,
-                    height, height, 0, &txid, &tx, k0_floor,
+                    &mut cache, &mut ss, &mut bt, &mut mt, height, height, 0, &txid, &tx, k0_floor,
                 ) {
                     Ok(g) => g,
                     Err(e) => {
                         return Ok(json!({"err": e, "gas": "0"}));
                     }
                 };
-                let data_root = cache.get(&scid).map(|t| hex::encode(t.hash())).unwrap_or_default();
+                let data_root = cache
+                    .get(&scid)
+                    .map(|t| hex::encode(t.hash()))
+                    .unwrap_or_default();
                 let balance_root = hex::encode(bt.hash());
                 let meta_root = hex::encode(mt.hash());
                 Ok(json!({"scid": hex::encode(scid), "gas": gas.to_string(),
@@ -2253,8 +2766,12 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             }
             "elgamal_commit" => {
                 let key = point_from_hex(&s("key")?)?;
-                let value: [u8; 32] = hex_decode(&s("value")?)?.try_into().map_err(|_| "value must be 32 bytes")?;
-                let r: [u8; 32] = hex_decode(&s("randomness")?)?.try_into().map_err(|_| "randomness must be 32 bytes")?;
+                let value: [u8; 32] = hex_decode(&s("value")?)?
+                    .try_into()
+                    .map_err(|_| "value must be 32 bytes")?;
+                let r: [u8; 32] = hex_decode(&s("randomness")?)?
+                    .try_into()
+                    .map_err(|_| "randomness must be 32 bytes")?;
                 Ok(eg_out(&ElGamal::commit(&key, &value, &r)))
             }
             "elgamal_add" => {
@@ -2264,12 +2781,16 @@ fn handle(id: i64, op: &str, raw: &Value) -> Value {
             }
             "elgamal_plus" => {
                 let e = eg_from_map(inp, "")?;
-                let value: [u8; 32] = hex_decode(&s("value")?)?.try_into().map_err(|_| "value must be 32 bytes")?;
+                let value: [u8; 32] = hex_decode(&s("value")?)?
+                    .try_into()
+                    .map_err(|_| "value must be 32 bytes")?;
                 Ok(eg_out(&e.plus(&value)))
             }
             "elgamal_mul" => {
                 let e = eg_from_map(inp, "")?;
-                let scalar: [u8; 32] = hex_decode(&s("scalar")?)?.try_into().map_err(|_| "scalar must be 32 bytes")?;
+                let scalar: [u8; 32] = hex_decode(&s("scalar")?)?
+                    .try_into()
+                    .map_err(|_| "scalar must be 32 bytes")?;
                 Ok(eg_out(&e.mul(&scalar)))
             }
             "elgamal_neg" => {
@@ -2314,7 +2835,8 @@ fn main() {
         let req: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
-                let resp = json!({"id": -1, "ok": false, "err": format!("bad request json: {}", e)});
+                let resp =
+                    json!({"id": -1, "ok": false, "err": format!("bad request json: {}", e)});
                 let _ = writeln!(out, "{}", resp);
                 continue;
             }

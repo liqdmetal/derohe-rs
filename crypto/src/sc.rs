@@ -5,11 +5,11 @@
 //! Wraps graviton trees so SC writes can be discarded on error, runs the DVM
 //! entrypoint, then commits data/transfers or reverts.
 
+use crate::curve::decode_compressed;
 use crate::dvm::{self, run_smart_contract_internal, SmartContract, Variable};
 use crate::elgamal::ElGamal;
 use crate::graviton::{tree_keys, Tree};
 use crate::hash_to_point::base_g;
-use crate::curve::decode_compressed;
 
 /// Tree_Wrapper (sc.go): pending writes + external transfers over a tree.
 pub struct TreeWrapper {
@@ -27,7 +27,11 @@ pub struct TransferExternal {
 
 impl TreeWrapper {
     pub fn new(tree: Tree) -> Self {
-        Self { tree, entries: std::collections::HashMap::new(), transfers: Vec::new() }
+        Self {
+            tree,
+            entries: std::collections::HashMap::new(),
+            transfers: Vec::new(),
+        }
     }
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         if let Some(v) = self.entries.get(key) {
@@ -69,7 +73,11 @@ pub fn store_sc_value(data: &mut TreeWrapper, _scid: &[u8; 32], key: &[u8], valu
 
 /// Wrapped_tree (sc.go): grab the SC data tree (from cache or snapshot),
 /// wrapping it so writes are discardable.
-pub fn wrapped_tree(cache: &mut std::collections::HashMap<[u8; 32], Tree>, ss: &Snapshot, id: &[u8; 32]) -> TreeWrapper {
+pub fn wrapped_tree(
+    cache: &mut std::collections::HashMap<[u8; 32], Tree>,
+    ss: &Snapshot,
+    id: &[u8; 32],
+) -> TreeWrapper {
     let tree = if let Some(t) = cache.get(id) {
         t.clone()
     } else {
@@ -85,7 +93,10 @@ pub struct Snapshot {
 }
 impl Snapshot {
     pub fn get_tree(&self, name: &str) -> Tree {
-        self.trees.get(name).cloned().unwrap_or_else(|| Tree::new(name))
+        self.trees
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| Tree::new(name))
     }
 }
 
@@ -127,7 +138,10 @@ pub fn execute_sc_function(
                 let zerohash = [0u8; 32];
                 match (&fp.vtype, fp.name.as_str()) {
                     (crate::dvm::Vtype::Uint64, "value") => {
-                        p.insert(fp.name.clone(), format!("{}", incoming_value.get(&zerohash).copied().unwrap_or(0)));
+                        p.insert(
+                            fp.name.clone(),
+                            format!("{}", incoming_value.get(&zerohash).copied().unwrap_or(0)),
+                        );
                     }
                     (crate::dvm::Vtype::Uint64, _) => {
                         if let Some(v) = scdata.get_uint64(&fp.name) {
@@ -143,14 +157,26 @@ pub fn execute_sc_function(
                             return Err(format!("entrypoint '{entrypoint}' parameter '{}' missing or not yet supported", fp.name));
                         }
                     }
-                    _ => return Err(format!("entrypoint '{entrypoint}' parameter type not yet supported")),
+                    _ => {
+                        return Err(format!(
+                            "entrypoint '{entrypoint}' parameter type not yet supported"
+                        ))
+                    }
                 }
             }
         }
         p
     };
 
-    let mut state = dvm::SharedState::new(scid, blid, txid, signer, bl_height, bl_topoheight, bl_timestamp);
+    let mut state = dvm::SharedState::new(
+        scid,
+        blid,
+        txid,
+        signer,
+        bl_height,
+        bl_topoheight,
+        bl_timestamp,
+    );
     // Wire incoming assets into the DVM state so DEROVALUE()/ASSETVALUE()
     // read them (Go sc.go:245-250 does state.Assets[asset] += value). Without
     // this, DEROVALUE() always returns 0 even when value is sent to the SC.
@@ -204,7 +230,12 @@ pub fn execute_sc_function(
         data_tree.transfers.extend(transfers.iter().cloned());
     }
 
-    let _ = (w_sc_tree, balance_at_start, scdata_bytes, gasstorage_incoming);
+    let _ = (
+        w_sc_tree,
+        balance_at_start,
+        scdata_bytes,
+        gasstorage_incoming,
+    );
     Ok((0, 0))
 }
 
@@ -216,13 +247,17 @@ pub fn seed_store_from_tree(store: &mut dvm::TXStorage, data_tree: &TreeWrapper)
     // pending writes in the wrapper take precedence over the committed tree
     for (k, v) in &data_tree.entries {
         if !v.is_empty() {
-            store.raw_keys.insert(String::from_utf8_lossy(k).into_owned(), v.clone());
+            store
+                .raw_keys
+                .insert(String::from_utf8_lossy(k).into_owned(), v.clone());
         }
     }
     for k in tree_keys(&data_tree.tree) {
         if let Some(v) = data_tree.tree.get(&k) {
             if !v.is_empty() {
-                store.raw_keys.insert(String::from_utf8_lossy(&k).into_owned(), v);
+                store
+                    .raw_keys
+                    .insert(String::from_utf8_lossy(&k).into_owned(), v);
             }
         }
     }
@@ -237,7 +272,9 @@ pub fn read_sc(data_tree: &mut TreeWrapper, scid: &[u8; 32]) -> (u64, Option<Sma
         Some(bytes) => {
             // Variable{String}.UnmarshalBinary -> the code
             match Variable::unmarshal_binary(&bytes) {
-                Ok(var) if var.vtype == dvm::Vtype::String => dvm::parse_smart_contract(&var.value_string).ok(),
+                Ok(var) if var.vtype == dvm::Vtype::String => {
+                    dvm::parse_smart_contract(&var.value_string).ok()
+                }
                 _ => None,
             }
         }
@@ -253,7 +290,8 @@ pub fn sanity_check_external_transfers(
     balance_tree: &Tree,
     scid: &[u8; 32],
 ) -> Result<(), String> {
-    let mut total_per_asset: std::collections::HashMap<[u8; 32], u64> = std::collections::HashMap::new();
+    let mut total_per_asset: std::collections::HashMap<[u8; 32], u64> =
+        std::collections::HashMap::new();
     for transfer in &w_sc_data_tree.transfers {
         if transfer.amount == 0 {
             continue;
@@ -271,7 +309,12 @@ pub fn sanity_check_external_transfers(
         if asset != *scid && stored.wrapping_sub(value) > stored {
             return Err("Balance calculation underflow".into());
         }
-        store_sc_value(w_sc_data_tree, scid, &asset, &(stored - value).to_be_bytes());
+        store_sc_value(
+            w_sc_data_tree,
+            scid,
+            &asset,
+            &(stored - value).to_be_bytes(),
+        );
     }
     // all destinations must be registered
     for transfer in &w_sc_data_tree.transfers {
@@ -297,9 +340,13 @@ pub fn error_revert(
         let curbtree: &mut Tree = if *scid_asset == zeroscid {
             balance_tree
         } else if *scid_asset == *scid {
-            cache.entry(*scid).or_insert_with(|| ss.get_tree(&String::from_utf8_lossy(scid).to_string()))
+            cache
+                .entry(*scid)
+                .or_insert_with(|| ss.get_tree(&String::from_utf8_lossy(scid).to_string()))
         } else {
-            cache.entry(*scid_asset).or_insert_with(|| ss.get_tree(&String::from_utf8_lossy(scid_asset).to_string()))
+            cache
+                .entry(*scid_asset)
+                .or_insert_with(|| ss.get_tree(&String::from_utf8_lossy(scid_asset).to_string()))
         };
         let balance_serialized = curbtree
             .get(signer)
@@ -356,7 +403,9 @@ pub fn process_external(
         } else if transfer.asset == *scid {
             cache.get_mut(scid).expect("sc tree in cache")
         } else {
-            cache.entry(transfer.asset).or_insert_with(|| ss.get_tree(&String::from_utf8_lossy(&transfer.asset).to_string()))
+            cache.entry(transfer.asset).or_insert_with(|| {
+                ss.get_tree(&String::from_utf8_lossy(&transfer.asset).to_string())
+            })
         };
         let addr_bytes = transfer.address.to_vec();
         let balance_serialized = match curbtree.get(&addr_bytes) {

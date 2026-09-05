@@ -91,7 +91,12 @@ pub fn calc_r(roothash: &[u8], ring_pubkeys: &[ark_bn254::G1Projective], sender_
 
 /// u (Go `uinput` construction):
 /// u = HashToPoint("DERO" ‖ roothash ‖ SCID ‖ scid_index) × secret
-pub fn calc_u(roothash: &[u8], scid: &[u8; 32], scid_index: i32, sender_secret: &Fr) -> ark_bn254::G1Projective {
+pub fn calc_u(
+    roothash: &[u8],
+    scid: &[u8; 32],
+    scid_index: i32,
+    sender_secret: &Fr,
+) -> ark_bn254::G1Projective {
     let mut uinput = Vec::new();
     uinput.extend_from_slice(b"DERO");
     uinput.extend_from_slice(roothash);
@@ -138,7 +143,7 @@ pub fn decode_balance(
     }
     let max = 1u64 << max_bits.min(63);
     let m: u64 = 1 << 20; // 1M baby steps (~32MB table)
-    // baby table: j*G for j in [1, m)
+                          // baby table: j*G for j in [1, m)
     let mut baby: HashMap<[u8; 33], u64> = HashMap::with_capacity(m as usize);
     let mut cur = g;
     for j in 1..m {
