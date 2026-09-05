@@ -30,7 +30,3 @@ getrandom = "0.2"
 [[bin]]
 name = "dero-oracle"
 path = "src/bin/oracle.rs"
-
-[[bin]]
-name = "compost-peer"
-path = "src/bin/compost_peer.rs"
