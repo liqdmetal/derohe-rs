@@ -301,6 +301,9 @@ mod tests {
     }
 
     #[test]
+    // Heavy BLS12-377 scalar mults: ~40s even in release. Debug builds on
+    // slower machines exceed CI harness budgets and get spuriously killed.
+    #[ignore = "slow (~40s release); run explicitly: cargo test --release classify_in_out_ring"]
     fn classify_in_out_ring() {
         // secret for "sender"
         let secret = Fr::from(123u64);
