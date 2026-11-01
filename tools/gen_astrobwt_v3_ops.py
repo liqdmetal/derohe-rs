@@ -10,8 +10,8 @@ Mechanical, so a typo can't hide: the mapping table is exhaustive.
 """
 import re
 
-SRC = r"C:/Users/$USER/derohe-rs/derohe-reference/astrobwt/astrobwtv3/pow.go"
-OUT = r"C:/Users/$USER/derohe-rs/crypto/src/astrobwt_v3_ops.rs"
+SRC = os.environ.get("SRC", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "derohe-reference", "astrobwt", "astrobwtv3", "pow.go")))
+OUT = os.environ.get("OUT", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "crypto", "src", "astrobwt_v3_ops.rs")))
 
 src = open(SRC, encoding="utf-8").read()
 

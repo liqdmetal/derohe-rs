@@ -3,4 +3,4 @@
 # All deps here are pure Rust (no C++ objects), so an empty archive satisfies
 # the linker without pulling real gcc_eh code.
 [target.x86_64-pc-windows-gnu]
-rustflags = ["-C", "link-arg=-LC:/Users/$USER/rust-libs"]
+rustflags = []

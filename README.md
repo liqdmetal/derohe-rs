@@ -64,20 +64,36 @@ derohe-reference/  Go reference (gitignored; differential oracle only)
 python3 harness/difftest.py
 cd crypto && cargo test --release        # 71 unit tests
 
-# node: sync + mine + wallet in one
-./crypto/target/release/node.exe \
+# node: sync + mine + wallet in one (`node.exe` on Windows)
+./crypto/target/release/node \
   --peer http://127.0.0.1:25000/json_rpc --port 26000 --mine \
   --miner <hex-key-or-bech32> --seed "<recovery words>"
 # then: DERO.Transfer {dest, amount} or {dest, sc_code} deploys/transfers
 
-# standalone wallet
-./crypto/target/release/wallet.exe "<words>" <dest> <amount> <daemon>
-./crypto/target/release/wallet.exe "<words>" --sc-install "<code>" <daemon>
+# standalone wallet (`wallet.exe` on Windows)
+./crypto/target/release/wallet "<words>" <dest> <amount> <daemon>
+./crypto/target/release/wallet "<words>" --sc-install "<code>" <daemon>
 ```
 
-Toolchain notes (Windows): Rust `x86_64-pc-windows-gnu` host; TDM-GCC lacks
-`libgcc_eh.a` — `crypto/.cargo/config.toml` points the linker at an empty
-archive in `~/rust-libs/libgcc_eh.a` (all deps are pure Rust).
+## Known issues
+
+- **Multi-string-arg SC calls** — `wallet --sc-call` with several STRING
+  arguments hits the node's params→DVM handoff (trailing tokens on apply).
+  Single-string-arg calls are verified working (e.g. `SetVal(k=42)`). Tracked
+  in the GitHub issue tracker.
+
+## Contributing
+
+PR titles must follow Conventional Commits (enforced by CI). Prefer opening
+an issue first for anything that touches consensus or serialization —
+byte-identical behaviour against the Go reference is a hard gate.
+
+Toolchain notes (Windows): Rust `x86_64-pc-windows-gnu` host. TDM-GCC-64
+(10.3.0) ships no `libgcc_eh.a`, so rustc's GNU target needs an empty
+archive to satisfy `-lgcc_eh` (all deps are pure Rust). `crypto/.cargo/
+config.toml` carries an empty `rustflags` default; if your link fails with
+`libgcc_eh.a` missing, create an empty `libgcc_eh.a` and point the linker
+at its directory, e.g. `rustflags = ["-C", "link-arg=-L<dir>"]`.
 
 ## Reference quirks replicated (the research record)
 
@@ -118,6 +134,9 @@ archive in `~/rust-libs/libgcc_eh.a` (all deps are pure Rust).
 
 ## License
 
-BSD 3-Clause (see `LICENSE`, `NOTICE.md`). `oracle/` and
-`derohe-reference/` are DERO Research License v1.1.2 test glue — never
-committed, never copied into the Rust crate.
+BSD 3-Clause (see `LICENSE`, `NOTICE.md`). The Rust crate, wallet-ffi,
+wasm-light-client, and harness are independently authored. `oracle/` is a
+committed **test-only** Go harness that links against the derohe reference
+(DERO Research License v1.1.2) to run the differential suite; it is not part
+of the BSD-3-Clause licensed library. The reference tree itself
+(`derohe-reference/`) is gitignored and never committed.

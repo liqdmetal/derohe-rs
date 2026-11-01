@@ -12,7 +12,7 @@ import sys
 import urllib.request
 
 RPC = "http://82.65.143.182:10102/json_rpc"
-ROOT = r"C:/Users/$USER/derohe-rs"
+ROOT = os.environ.get("DEROHE_RS_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 NODE = ROOT + "/crypto/target/release/node.exe"
 START = int(sys.argv[1]) if len(sys.argv) > 1 else 7500000
 COUNT = int(sys.argv[2]) if len(sys.argv) > 2 else 50

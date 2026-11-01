@@ -8,7 +8,7 @@ import urllib.request
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 26000
 RPC = f"http://127.0.0.1:{PORT}/json_rpc"
-RUST = r"C:/Users/$USER/derohe-rs/crypto/target/release/dero-oracle.exe"
+RUST = os.environ.get("DERO_ORACLE_BIN", os.path.join(ROOT, "crypto", "target", "release", "dero-oracle.exe"))
 WORDS = "sequence atlas unveil summon pebbles tuesday beer rudely snake rockets different fuselage woven tagged bested dented vegan hover rapid fawns obvious muppet randomly seasons randomly"
 START = int(sys.argv[2]) if len(sys.argv) > 2 else 21
 

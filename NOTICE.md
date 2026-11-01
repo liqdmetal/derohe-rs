@@ -6,21 +6,25 @@
 `LICENSE`). It is a clean-room, from-scratch Rust reimplementation of the
 consensus-critical portions of the DERO protocol.
 
-### The Go reference (deroproject/derohe) is NOT part of this repository
+### The Go reference (deroproject/derohe) and this repository
 
 The DERO Go implementation (`deroproject/derohe`) is licensed separately by
 the DERO Project under the **DERO Research License v1.1.2**, which permits
 research use only and requires a commercial license for commercial use.
-That license does NOT apply to this repository:
 
-- This repository contains **no source code from derohe**. The reference
-  tree is fetched into `derohe-reference/` (gitignored) solely to run as a
-  **differential-testing oracle** and is never committed.
-- All Rust, Python, and supporting code here was **independently authored**
-  from the DERO protocol specification and public documentation.
-- The reference implementation was used exclusively as a black-box test
-  oracle: inputs are fed to both implementations and outputs compared
-  byte-for-byte. No code was copied, translated, or derived from it.
+- The **BSD-3-Clause licensed code** in this repository (the Rust crate,
+  wallet-ffi, wasm-light-client, harness, tools) contains **no source code
+  from derohe**. All of it was independently authored from the DERO protocol
+  specification and public documentation; the reference implementation was
+  used exclusively as a black-box test oracle — inputs fed to both
+  implementations and outputs compared byte-for-byte.
+- **`oracle/` is an exception, clearly separated**: it is a test-only Go
+  harness that imports `deroproject/derohe` and `deroproject/graviton` to
+  run the differential suite. It is committed only to make the tests
+  reproducible, carries the DERO Research License v1.1.2 terms, is not part
+  of the BSD-3-Clause licensed library, and is never built or linked into
+  the Rust crate. The reference tree itself is fetched into
+  `derohe-reference/` (gitignored) and is never committed.
 
 ### Protocol facts are not copyrightable expression
 
@@ -38,10 +42,10 @@ expresses those facts in original Rust code.
 - **Precedent**: XELIS — a BSD-3-Clause, from-scratch Rust implementation of
   a DERO-style ElGamal blockDAG — demonstrates this licensing path is
   accepted in the ecosystem.
-- **Verification record**: 2,575+ differential vectors, 66 unit tests,
-  mainnet block replay (BLIDs byte-identical), smart-contract install/call
-  replay, and end-to-end wallet transactions mined on a local reference
-  network.
+- **Verification record**: 2,578+ differential vectors, 71 unit + 4
+  integration tests, mainnet block replay (BLIDs byte-identical), reorg
+  replay, smart-contract install/call replay, and end-to-end wallet
+  transactions mined on a local reference network.
 
 ## Copyright
 
